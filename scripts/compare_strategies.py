@@ -38,7 +38,31 @@ def slice_bars(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
     return df[(df.ts >= start) & (df.ts < end)].reset_index(drop=True)
 
 
-def run_period(df5m, df1m, start, end, exec_config, null_runs=0):
+def apply_hindsight(orders: pd.DataFrame, bars: pd.DataFrame, n_bars: int) -> pd.DataFrame:
+    """Move every order's activation ``n_bars`` earlier — a look-ahead probe.
+
+    This exists because a one-bar version of exactly this shift was a real bug
+    in an earlier revision: detectors marked patterns knowable at their anchor
+    bar's open when the pattern needs its close, letting orders fill inside the
+    bar that generated them. It was worth several hundred thousand dollars of
+    fictional profit and inverted the sign of the whole study.
+
+    Keeping it as a deliberate, measurable knob means any future strategy can be
+    asked the diagnostic question directly: how much of this edge is only worth
+    having if you can see one bar ahead? A model whose results collapse at
+    ``n_bars=1`` was never measuring anything else.
+    """
+    if orders.empty or n_bars <= 0:
+        return orders
+    shifted = orders.copy()
+    step = D.bar_duration(bars) * n_bars
+    shifted["valid_from"] = (shifted["valid_from"] - step).clip(
+        lower=shifted["signal_ts"]
+    )
+    return shifted
+
+
+def run_period(df5m, df1m, start, end, exec_config, null_runs=0, hindsight_bars=0):
     """Run all strategies plus the combined account over one period."""
     signals = slice_bars(df5m, start, end)
     # Slice the 1-minute bars too: simulate() searchsorts into this frame for
@@ -48,6 +72,8 @@ def run_period(df5m, df1m, start, end, exec_config, null_runs=0):
     orders_by_strategy, results, null_totals = {}, {}, {}
     for name in registry.NAMES:
         orders = registry.generate(name, signals)
+        if hindsight_bars:
+            orders = apply_hindsight(orders, signals, hindsight_bars)
         orders_by_strategy[name] = orders
         trades = simulate(orders, fills, exec_config)
         results[name] = {
@@ -102,6 +128,9 @@ def main(argv=None) -> int:
     ap.add_argument("--null-runs", type=int, default=0,
                     help="direction-randomised runs per strategy for the best-of-N test")
     ap.add_argument("--risk", type=float, default=500.0, help="risk per trade in USD")
+    ap.add_argument("--hindsight-bars", type=int, default=0,
+                    help="look-ahead probe: activate orders N bars early "
+                         "(0 = correct; 1 reproduces the fixed bug)")
     ap.add_argument("--json", default=None, help="write full results here")
     args = ap.parse_args(argv)
 
@@ -111,11 +140,16 @@ def main(argv=None) -> int:
     df5m = D.load("5m")
     df1m = D.load("1m", with_time_columns=False)
 
-    payload = {"risk_per_trade_usd": args.risk, "periods": {}}
+    payload = {"risk_per_trade_usd": args.risk,
+               "hindsight_bars": args.hindsight_bars, "periods": {}}
     for period, (start, end) in PERIODS.items():
         print(f"running {period} ({start} -> {end}) ...")
-        out = run_period(df5m, df1m, start, end, exec_config, args.null_runs)
-        print_table(f"{period.upper().replace('_', '-')}   {start} -> {end}", out["results"])
+        out = run_period(df5m, df1m, start, end, exec_config, args.null_runs,
+                         args.hindsight_bars)
+        suffix = (f"   [+{args.hindsight_bars} bar look-ahead]"
+                  if args.hindsight_bars else "")
+        print_table(f"{period.upper().replace('_', '-')}   {start} -> {end}{suffix}",
+                    out["results"])
 
         if args.null_runs:
             actual = {n: out["results"][n]["stats"].get("total_pnl", 0.0)

@@ -8,47 +8,81 @@
 ```bash
 uv venv && uv pip install -e ".[dev]"
 uv run python scripts/ingest.py          # 合併原始 parquet + 驗證
-uv run pytest                            # 99 個測試
-uv run python scripts/run_backtest.py --split --by-year --control
+uv run pytest                            # 155 個測試
+uv run python scripts/compare_strategies.py --split      # 七套 + 組合帳戶
+uv run python scripts/compare_strategies.py --hindsight-bars 1   # 前視敏感度
 ```
 
 ## 結論先講
 
-第一套編碼的模型是 **PO3 / Judas Swing**（第 12 堂課）。結果誠實報告如下：
+七套策略，同樣期間，一天一張單，固定每筆風險 $500。**全部虧錢。**
 
-| | 開發期 2016–2023 | 樣本外 2024–2026 |
+📊 **[完整視覺化報告（權益曲線 + 全部數據）](https://claude.ai/code/artifact/97822a07-7616-42a1-b874-5a404d67f460)**
+
+| 策略 | 開發 2016–2024 | 樣本外 2024–2026 |
 |---|---|---|
-| 訊號 / 成交 | 129 / 88 | 51 / 37 |
-| 勝率 | 60.2% | 48.6% |
-| 平均 R | +0.221 | +0.063 |
-| 淨損益 | **+$383** | **−$3,158** |
-| 獲利因子 | 1.010 | 0.882 |
-| 最大回撤 | −$9,186 | −$6,112 |
+| po3_judas | +$3,832 (PF 1.26) | −$1,159 (PF 0.85) |
+| silver_bullet | −$180,752 (PF 0.68) | −$45,782 (PF 0.74) |
+| turtle_soup | −$47,762 (PF 0.75) | −$18,194 (PF 0.76) |
+| ob_retest | −$181,086 (PF 0.70) | −$85,988 (PF 0.67) |
+| breaker_retest | −$126,135 (PF 0.77) | −$68,738 (PF 0.73) |
+| ote_retracement | −$488,427 (PF 0.39) | −$353,924 (PF 0.28) |
+| sfp_reversal | −$430,414 (PF 0.51) | −$102,529 (PF 0.64) |
+| **組合帳戶** | **−$393,706 (PF 0.55)** | **−$83,929 (PF 0.69)** |
 
-**這套策略在扣掉成本後沒有可交易的優勢。** 開發期基本打平（獲利因子 1.01，
-88 筆交易賺 $383），樣本外是虧的。蒙地卡羅重排 2000 次：**虧損機率 100%**。
+樣本外沒有一套獲利因子到 1.0。最好的 po3_judas 八年 83 筆交易賺 $3,832，不是一門生意。
 
-逐年看更清楚 —— 2020 賺 $4,564，2022 虧 $7,247，其餘年份都是雜訊。
-一套靠單一年份撐起來的策略不是策略。
+### 最重要的發現：一根 K 棒的後見之明值三十萬美金
 
-### 但方向判斷本身是有資訊的
+第一次跑出來的數字很漂亮 —— sfp_reversal 樣本外 +$197,038（PF 2.24）、
+ob_retest +$71,935、組合帳戶 +$63,628。**全部是假的。**
 
-這是比「沒用」更有價值的發現。控制組實驗：**同樣的設置、同樣的進場價、
-同樣的停損停利距離，只把方向隨機化**：
+每個偵測器把 `confirmed_at` 設成錨定 K 棒的**開盤**時間，但這些型態都要讀那根 K 的
+**收盤**（掃針要收回、結構突破要收破、FVG 要第三根收完）。於是「確認後才下的單」
+可以被同一根 5 分鐘 K 內部的 1 分鐘 K 成交，用一個還沒印出來的收盤價。
 
-| | 策略 | 隨機方向 (200 次中位數) |
+症狀是 sfp_reversal 的**成交率 100%**。修正後：
+
+| | 修正前（偷看一根 K） | 修正後 |
 |---|---|---|
-| 開發期損益 | +$383 | −$26,100 |
-| 樣本外損益 | −$3,158 | −$26,374 |
-| 勝率 | 60.2% / 48.6% | 34.7% / 30.2% |
+| sfp_reversal 樣本外 | +$197,038 (PF 2.24) | **−$102,529 (PF 0.64)** |
+| ob_retest 樣本外 | +$71,935 (PF 1.36) | **−$85,988 (PF 0.67)** |
+| 組合帳戶樣本外 | +$63,628 (PF 1.28) | **−$83,929 (PF 0.69)** |
 
-策略在兩個期間都落在隨機方向分布的 **~95 百分位**。
+**原本的無前視測試沒抓到**，因為它驗的是*自洽*（截斷重跑要一致）。
+一個每個事件都早一根 K 的偵測器，截斷重跑完全一致 —— 它一致地錯。
+`tests/test_confirmation_timing.py` 現在驗性質本身：確認時間必須落在 K 棒收盤。
 
-也就是說：PO3 對「掃了哪一邊之後價格會往哪走」的判斷**確實帶有真實資訊**
-（勝率 60% vs 隨機 35%），問題出在**風險幾何**——停損放在猶大極值外，
-中位數風險 69 點（每口 $1,380），優勢被停損距離和成本吃光了。
+這個 bug 已經變成永久的診斷工具：
 
-這指向具體的改進方向（更緊的停損、更好的進場位），而不是放棄這個模型。
+```bash
+uv run python scripts/compare_strategies.py --hindsight-bars 1
+```
+
+任何新策略都可以直接問：這個優勢有多少是靠看到下一根 K？在 N=1 就崩掉的，
+本來就沒在量別的東西。
+
+### 關於「避免過擬合」
+
+測七套挑最好的，本身就是過擬合 —— 七套零優勢策略裡最好的那套，
+在開發期看起來也會不錯。所以做了 **best-of-N 虛無檢定**：
+把每套策略的方向隨機化（設置、進場、停損停利距離全保留，只擲硬幣決定多空），
+跑 50 輪，每輪取七套的最大值，得到「七套雜訊的贏家」分布。
+
+兩個期間 p 值都是 0.000：真實的 po3_judas 贏過那條分布。
+**所以方向判斷確實帶有資訊 —— 但它還是虧錢。比擲硬幣好，不代表比不交易好。**
+
+*檢定的限制*：比較用總金額，沒按交易次數正規化。po3_judas 只有 83 筆、
+sfp_reversal 有 1,761 筆，隨機化後前者虧最少，「七套最大值」幾乎永遠是它，
+所以這實際上退化成「po3_judas 對上自己的隨機版本」。結論仍成立，但不是公平擂台。
+
+### 七套其實只有兩三個想法
+
+訊號日重疊（樣本外）：ob_retest、breaker_retest、ote_retracement、sfp_reversal
+四套共用 **97–100%** 的交易日。組合帳戶用「全天最早觸發的那張單」，
+結果 po3_judas、silver_bullet、turtle_soup 樣本外**一筆都沒下到** ——
+它們發訊號較晚，永遠被搶先，而搶先的正是虧最多的那幾套。
+「最早訊號優先」本身就是一條很差的選擇規則。
 
 ## 資料
 
@@ -118,9 +152,13 @@ ict/            概念庫 — 純函式，可獨立測試
   fvg.py          FVG / BPR         liquidity.py   掃針 / SFP / 等高低
   levels.py       溢價折價 / OTE    orderblocks.py OB / Breaker / Mitigation
   patterns.py     QML / FTR / TT3   po3.py         累積-操縱-派發
-strategies/     po3_judas.py
-backtest/       engine.py (1 分鐘解析) · metrics.py · controls.py
-tests/          99 個測試，含 test_no_lookahead.py
+strategies/     base.py (共用機制) · registry.py (七套預先登記)
+                po3_judas · silver_bullet · turtle_soup · ob_retest
+                breaker_retest · ote_retracement · sfp_reversal
+backtest/       engine.py (1 分鐘解析 + 固定風險部位) · metrics.py
+                controls.py (隨機方向 + best-of-N) · portfolio.py
+tests/          155 個測試，含 test_no_lookahead.py 與
+                test_confirmation_timing.py（抓前一個測試抓不到的那類 bug）
 docs/           curriculum.md (40 堂課 + 30 策略) · glossary.md (術語→函式)
 ```
 
@@ -130,21 +168,26 @@ docs/           curriculum.md (40 堂課 + 30 策略) · glossary.md (術語→�
   全部連結 + 每堂課對應的程式碼。可以當學習進度表用。
 - **[docs/glossary.md](docs/glossary.md)** — ICT 術語 → 實作函式對照。
 - **[docs/DATABENTO_README.md](docs/DATABENTO_README.md)** — 原始資料說明（隨資料附上）。
+- **[docs/strategy_report.html](docs/strategy_report.html)** — 七套策略完整視覺化報告
+  （[線上版](https://claude.ai/code/artifact/97822a07-7616-42a1-b874-5a404d67f460)）。
 
 ## 常用指令
 
 ```bash
-# 最近兩年（清單第 2 點的要求）
-uv run python scripts/run_backtest.py --start 2024-09-01
+# 七套策略 + 組合帳戶，開發期 vs 樣本外
+uv run python scripts/compare_strategies.py --split
 
-# 開發期 vs 樣本外，逐年拆解，加控制組
-uv run python scripts/run_backtest.py --split --by-year --control --monte-carlo
+# 加上 best-of-N 虛無檢定（慢，約 40 分鐘）
+uv run python scripts/compare_strategies.py --null-runs 50 --json results.json
 
-# 換參數（注意：在樣本外調參就不叫樣本外了）
-uv run python scripts/run_backtest.py --target-mode fixed_r --target-r 3 --entry-level far
+# 前視敏感度：訂單提早 N 根 K 生效，量「偷看」值多少錢
+uv run python scripts/compare_strategies.py --hindsight-bars 1
 
-# 導出逐筆交易，人工抽查
-uv run python scripts/run_backtest.py --start 2024-09-01 --csv trades.csv
+# 改風險預算
+uv run python scripts/compare_strategies.py --risk 250
+
+# 單看 PO3（第一階段的腳本，含逐年拆解與隨機對照組）
+uv run python scripts/run_backtest.py --split --by-year --control
 ```
 
 ## 免責

@@ -23,6 +23,7 @@ import pandas as pd
 
 from ict.events import BULLISH
 from ict.levels import DealingRange
+from ict.data import bar_duration
 from ict.sessions import in_window
 from ict.structure import find_msb
 
@@ -46,6 +47,7 @@ def generate_orders(df5m: pd.DataFrame, config: OTEConfig | None = None) -> pd.D
         return finalize([])
 
     in_kz = set(df5m.index[in_window(df5m, config.window_start, config.window_end)])
+    step = bar_duration(df5m)
 
     days = day_groups(df5m)
 
@@ -67,7 +69,9 @@ def generate_orders(df5m: pd.DataFrame, config: OTEConfig | None = None) -> pd.D
         leg = df5m.iloc[bar_index:end]
         if leg.empty:
             continue
-        valid_from = leg["ts"].iloc[-1]
+        # The leg's extreme is not known until its final bar has closed, so the
+        # order cannot become valid at that bar's open.
+        valid_from = leg["ts"].iloc[-1] + step
 
         level = float(brk["level"])
         if direction == BULLISH:
