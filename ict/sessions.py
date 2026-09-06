@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from .data import bar_duration
+
 #: name -> (start minute-of-day ET, end minute-of-day ET). End is exclusive.
 KILLZONES: dict[str, tuple[int, int]] = {
     "asian":        (20 * 60, 24 * 60),        # 20:00 - 00:00 ET
@@ -66,12 +68,6 @@ def session_ranges(df: pd.DataFrame, name: str) -> pd.DataFrame:
     grouped["available_at"] = grouped["end"] + bar_duration(df)
     return grouped
 
-
-def bar_duration(df: pd.DataFrame) -> pd.Timedelta:
-    """Infer the bar interval from the most common timestamp spacing."""
-    if len(df) < 2:
-        raise ValueError("need at least two bars to infer bar duration")
-    return pd.Timedelta(df["ts"].diff().dropna().mode().iloc[0])
 
 
 def prior_day_levels(df: pd.DataFrame) -> pd.DataFrame:

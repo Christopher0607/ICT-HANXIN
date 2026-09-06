@@ -16,6 +16,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .data import bar_duration
 from .events import BEARISH, BULLISH, make_events, validate_events
 
 SWING_COLUMNS = ["price", "bar_index"]
@@ -51,6 +52,7 @@ def find_swings(df: pd.DataFrame, n: int = 2) -> pd.DataFrame:
         is_low[n:-n] &= low[n:-n] < low[n + offset : size - n + offset]
 
     ts_series = df["ts"].reset_index(drop=True)
+    step = bar_duration(df)
     frames = []
     for mask, kind, direction, prices in (
         (is_high, "swing_high", BEARISH, high),
@@ -61,7 +63,7 @@ def find_swings(df: pd.DataFrame, n: int = 2) -> pd.DataFrame:
             continue
         frames.append(pd.DataFrame({
             "ts": ts_series.iloc[idx].to_numpy(),
-            "confirmed_at": ts_series.iloc[idx + n].to_numpy(),
+            "confirmed_at": ts_series.iloc[idx + n].to_numpy() + step,
             "kind": kind,
             "direction": direction,
             "price": prices[idx].astype("float64"),

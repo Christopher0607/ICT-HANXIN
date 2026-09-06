@@ -21,9 +21,10 @@ def test_swing_confirms_n_bars_after_the_swing_itself():
     df = bars([(100, 101, 99, 100), (100, 102, 99, 101), (101, 105, 100, 104),
                (104, 103, 99, 100), (100, 102, 98, 99)])
     high = find_swings(df, n=2).iloc[0]
-    # The peak is at bar 2 but is unknowable until bar 4 closes.
+    # The peak is at bar 2 but is unknowable until bar 4 has CLOSED. Bar
+    # timestamps are opens, so confirmation is bar 4's open plus one interval.
     assert high["ts"] == df.ts.iloc[2]
-    assert high["confirmed_at"] == df.ts.iloc[4]
+    assert high["confirmed_at"] == df.ts.iloc[4] + pd.Timedelta(minutes=5)
 
 
 def test_plateau_of_equal_highs_is_not_a_swing():

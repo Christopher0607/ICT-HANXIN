@@ -1,5 +1,7 @@
 """Three-bar fair value gaps."""
 
+import pandas as pd
+
 from ict.events import BEARISH, BULLISH
 from ict.fvg import find_fvgs
 from tests.fixtures import bars, flat
@@ -27,8 +29,9 @@ def test_bearish_gap_is_the_mirror():
 def test_gap_confirms_on_the_third_bar_not_the_displacement_bar():
     df = bars([(100, 101, 99, 100), (102, 106, 101, 105), (106, 108, 105, 107)])
     g = find_fvgs(df).iloc[0]
-    assert g["ts"] == df.ts.iloc[1]            # anchored to the displacement bar
-    assert g["confirmed_at"] == df.ts.iloc[2]  # visible only once bar 2 closes
+    assert g["ts"] == df.ts.iloc[1]  # anchored to the displacement bar
+    # Visible only once bar 2 has CLOSED — its low is part of the criterion.
+    assert g["confirmed_at"] == df.ts.iloc[2] + pd.Timedelta(minutes=5)
 
 
 def test_touching_bars_leave_no_gap():

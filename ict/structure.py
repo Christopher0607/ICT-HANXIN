@@ -28,6 +28,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .data import bar_duration
 from .events import BEARISH, BULLISH, make_events
 from .swings import find_swings
 
@@ -48,6 +49,7 @@ def find_msb(df: pd.DataFrame, n: int = 2, swings: pd.DataFrame | None = None) -
 
     ts = df["ts"].reset_index(drop=True)
     close = df["close"].to_numpy()
+    step = bar_duration(df)
 
     # Bucket swings by the bar index at which they become visible, so the walk
     # below can never see a swing before it was confirmed.
@@ -68,7 +70,7 @@ def find_msb(df: pd.DataFrame, n: int = 2, swings: pd.DataFrame | None = None) -
         if pending_high is not None and close[i] > pending_high[0]:
             structure = "bos" if trend >= 0 else "choch"
             rows.append({
-                "ts": ts.iloc[i], "confirmed_at": ts.iloc[i],
+                "ts": ts.iloc[i], "confirmed_at": ts.iloc[i] + step,
                 "kind": "msb", "direction": BULLISH,
                 "level": pending_high[0], "structure": structure,
                 "broken_swing_ts": pending_high[1], "bar_index": i,
@@ -79,7 +81,7 @@ def find_msb(df: pd.DataFrame, n: int = 2, swings: pd.DataFrame | None = None) -
         elif pending_low is not None and close[i] < pending_low[0]:
             structure = "bos" if trend <= 0 else "choch"
             rows.append({
-                "ts": ts.iloc[i], "confirmed_at": ts.iloc[i],
+                "ts": ts.iloc[i], "confirmed_at": ts.iloc[i] + step,
                 "kind": "msb", "direction": BEARISH,
                 "level": pending_low[0], "structure": structure,
                 "broken_swing_ts": pending_low[1], "bar_index": i,

@@ -24,6 +24,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .data import bar_duration
 from .events import BEARISH, BULLISH, make_events
 
 FVG_COLUMNS = ["top", "bottom", "midpoint", "size", "bar_index"]
@@ -40,6 +41,7 @@ def find_fvgs(df: pd.DataFrame, min_size: float = 0.0) -> pd.DataFrame:
         return make_events([], FVG_COLUMNS)
 
     ts = df["ts"].reset_index(drop=True)
+    step = bar_duration(df)
     high = df["high"].to_numpy()
     low = df["low"].to_numpy()
 
@@ -68,7 +70,7 @@ def find_fvgs(df: pd.DataFrame, min_size: float = 0.0) -> pd.DataFrame:
         bar_i, top, bottom, size = bar_i[keep], top[keep], bottom[keep], size[keep]
         frames.append(pd.DataFrame({
             "ts": ts.iloc[bar_i - 1].to_numpy(),        # displacement bar
-            "confirmed_at": ts.iloc[bar_i].to_numpy(),  # visible at its close
+            "confirmed_at": ts.iloc[bar_i].to_numpy() + step,  # visible at its close
             "kind": kind, "direction": direction,
             "top": top, "bottom": bottom,
             "midpoint": (top + bottom) / 2.0,

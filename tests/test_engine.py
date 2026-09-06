@@ -44,12 +44,13 @@ def test_unreachable_limit_expires_and_is_kept_in_the_log():
 
 
 def test_target_exit_pays_commission_but_not_slippage():
-    cfg = BacktestConfig(commission_per_round_turn=4.0, exit_slippage_ticks=1.0)
+    cfg = BacktestConfig(commission_per_round_turn=4.0, exit_slippage_ticks=1.0,
+                         sizing="fixed_contracts", contracts=1)
     t = simulate(_order(), RISING, cfg)
     assert t.exit_reason[0] == "target"
     assert t.exit_price[0] == 110.0
     assert t.points[0] == 10.0
-    assert t.gross_pnl[0] == pytest.approx(10.0 / TICK_SIZE * 5.0)
+    assert t.gross_pnl[0] == pytest.approx(10.0 / TICK_SIZE * cfg.tick_value)
     assert t.net_pnl[0] == pytest.approx(t.gross_pnl[0] - 4.0)
 
 

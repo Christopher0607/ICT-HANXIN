@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .data import bar_duration
 from .events import BEARISH, BULLISH, make_events
 from .swings import find_swings
 
@@ -73,6 +74,7 @@ def find_sr_flips(
         return make_events([], FLIP_COLUMNS)
 
     ts = df["ts"].reset_index(drop=True)
+    step = bar_duration(df)
     high, low, close = (df[c].to_numpy() for c in ("high", "low", "close"))
     rows = []
 
@@ -92,7 +94,7 @@ def find_sr_flips(
                         else high[j] >= level - tolerance)
             if retested:
                 rows.append({
-                    "ts": s["ts"], "confirmed_at": ts.iloc[j],
+                    "ts": s["ts"], "confirmed_at": ts.iloc[j] + step,
                     "kind": "sr_flip",
                     "direction": BULLISH if s["kind"] == "swing_high" else BEARISH,
                     "level": level, "broken_at": ts.iloc[broke_at], "bar_index": j,
@@ -141,6 +143,7 @@ def find_range_deviations(
         return make_events([], DEVIATION_COLUMNS)
 
     ts = df["ts"].reset_index(drop=True)
+    step = bar_duration(df)
     high, low, close = (df[c].to_numpy() for c in ("high", "low", "close"))
     roll_high = pd.Series(high).rolling(window).max().to_numpy()
     roll_low = pd.Series(low).rolling(window).min().to_numpy()
@@ -152,14 +155,14 @@ def find_range_deviations(
             continue
         if high[i] > rh + min_deviation and close[i] < rh:
             rows.append({
-                "ts": ts.iloc[i], "confirmed_at": ts.iloc[i],
+                "ts": ts.iloc[i], "confirmed_at": ts.iloc[i] + step,
                 "kind": "range_deviation", "direction": BEARISH,
                 "range_high": float(rh), "range_low": float(rl),
                 "level": float(rh), "extreme": float(high[i]), "bar_index": i,
             })
         elif low[i] < rl - min_deviation and close[i] > rl:
             rows.append({
-                "ts": ts.iloc[i], "confirmed_at": ts.iloc[i],
+                "ts": ts.iloc[i], "confirmed_at": ts.iloc[i] + step,
                 "kind": "range_deviation", "direction": BULLISH,
                 "range_high": float(rh), "range_low": float(rl),
                 "level": float(rl), "extreme": float(low[i]), "bar_index": i,
@@ -184,6 +187,7 @@ def find_ftr(
         return make_events([], FLIP_COLUMNS)
 
     ts = df["ts"].reset_index(drop=True)
+    step = bar_duration(df)
     high, low = df["high"].to_numpy(), df["low"].to_numpy()
     rows = []
     for _, brk in msb.iterrows():
@@ -197,7 +201,7 @@ def find_ftr(
                     else (high[window] >= level).any())
         if not returned:
             rows.append({
-                "ts": brk["ts"], "confirmed_at": ts.iloc[stop - 1],
+                "ts": brk["ts"], "confirmed_at": ts.iloc[stop - 1] + step,
                 "kind": "ftr", "direction": int(brk["direction"]),
                 "level": level, "broken_at": brk["ts"], "bar_index": i,
             })

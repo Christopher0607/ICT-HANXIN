@@ -26,6 +26,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .data import bar_duration
 from .events import BEARISH, BULLISH, make_events
 from .fvg import find_fvgs
 from .structure import find_msb
@@ -59,6 +60,7 @@ def find_order_blocks(
         return make_events([], OB_COLUMNS)
 
     ts = df["ts"].reset_index(drop=True)
+    step = bar_duration(df)
     open_ = df["open"].to_numpy()
     close = df["close"].to_numpy()
     high = df["high"].to_numpy()
@@ -95,7 +97,7 @@ def find_order_blocks(
         has_fvg = bool(fvg_bars.get(direction, set()) & set(leg))
 
         rows.append({
-            "ts": ts.iloc[origin], "confirmed_at": ts.iloc[break_index],
+            "ts": ts.iloc[origin], "confirmed_at": ts.iloc[break_index] + step,
             "kind": "super_order_block" if has_fvg else "order_block",
             "direction": direction,
             "top": float(high[origin]), "bottom": float(low[origin]),
@@ -117,6 +119,7 @@ def find_breakers(
         return make_events([], OB_COLUMNS)
 
     ts = df["ts"].reset_index(drop=True)
+    step = bar_duration(df)
     high = df["high"].to_numpy()
     low = df["low"].to_numpy()
     close = df["close"].to_numpy()
@@ -132,7 +135,7 @@ def find_breakers(
             )
             if violated:
                 rows.append({
-                    "ts": ob["ts"], "confirmed_at": ts.iloc[j],
+                    "ts": ob["ts"], "confirmed_at": ts.iloc[j] + step,
                     "kind": "breaker",
                     "direction": -direction,  # polarity flips
                     "top": float(ob["top"]), "bottom": float(ob["bottom"]),

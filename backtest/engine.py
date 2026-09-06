@@ -40,16 +40,50 @@ TICK_VALUE_MNQ = 0.50  # $ per tick, Micro MNQ
 class BacktestConfig:
     """Execution assumptions. Defaults are deliberately conservative."""
 
-    tick_value: float = TICK_VALUE_NQ
+    #: Micro (MNQ) by default. Fixed-risk sizing needs granularity: a $500
+    #: budget against a 69-point stop is 0.36 E-mini contracts (untradeable)
+    #: but 3 micros. Set TICK_VALUE_NQ to size in E-minis instead.
+    tick_value: float = TICK_VALUE_MNQ
     commission_per_round_turn: float = 4.00
     entry_slippage_ticks: float = 0.0   # limit orders fill at their price or better
     exit_slippage_ticks: float = 1.0    # stops are market orders and do slip
     ambiguity: str = "pessimistic"      # or "optimistic"
+
+    #: "fixed_risk" sizes each trade so a stop-out costs roughly
+    #: ``risk_per_trade_usd``; "fixed_contracts" always trades ``contracts``.
+    #:
+    #: Fixed contracts is the wrong default for comparing models. With stops
+    #: ranging from 10 to 200 points, a fixed size gives the widest-stop trades
+    #: twenty times the weight of the tightest, so the equity curve measures
+    #: stop placement rather than edge. That is precisely what sank the first
+    #: PO3 run: a 60% win rate with an average loss larger than the average win.
+    sizing: str = "fixed_risk"
+    risk_per_trade_usd: float = 500.0
     contracts: int = 1
+    max_contracts: int = 200
 
     def __post_init__(self) -> None:
         if self.ambiguity not in ("pessimistic", "optimistic"):
             raise ValueError("ambiguity must be 'pessimistic' or 'optimistic'")
+        if self.sizing not in ("fixed_risk", "fixed_contracts"):
+            raise ValueError("sizing must be 'fixed_risk' or 'fixed_contracts'")
+
+    def size_for(self, risk_points: float) -> int:
+        """Contracts to trade given the stop distance, or 0 to skip the trade.
+
+        Under fixed risk this rounds *down*, so realised risk never exceeds the
+        budget. A stop so wide that even one contract breaches the budget
+        returns 0 and the setup is recorded as skipped rather than silently
+        taken at the wrong size.
+        """
+        if self.sizing == "fixed_contracts":
+            return self.contracts
+        if risk_points <= 0:
+            return 0
+        risk_per_contract = risk_points / TICK_SIZE * self.tick_value
+        if risk_per_contract <= 0:
+            return 0
+        return int(min(self.risk_per_trade_usd // risk_per_contract, self.max_contracts))
 
 
 ORDER_COLUMNS = [
@@ -102,6 +136,12 @@ def simulate(orders: pd.DataFrame, bars: pd.DataFrame, config: BacktestConfig | 
         final = int(ts.searchsorted(order["time_exit_ts"], side="right"))
         expiry, final = min(expiry, len(ts)), min(final, len(ts))
 
+        size = config.size_for(abs(entry - stop))
+        if size <= 0:
+            # Stop too wide to fit the risk budget at even one contract.
+            results.append(_unfilled(order, reason="oversized"))
+            continue
+
         fill_index = _find_fill(low, high, start, expiry, entry, direction)
         if fill_index is None:
             results.append(_unfilled(order))
@@ -116,8 +156,8 @@ def simulate(orders: pd.DataFrame, bars: pd.DataFrame, config: BacktestConfig | 
 
         points = (exit_price - entry_price) * direction
         risk = abs(entry_price - stop)
-        gross = points / TICK_SIZE * config.tick_value * config.contracts
-        commission = config.commission_per_round_turn * config.contracts
+        gross = points / TICK_SIZE * config.tick_value * size
+        commission = config.commission_per_round_turn * size
         results.append({
             "filled": True,
             "entry_ts": ts[fill_index],
@@ -132,6 +172,7 @@ def simulate(orders: pd.DataFrame, bars: pd.DataFrame, config: BacktestConfig | 
             "net_pnl": gross - commission,
             "bars_held": exit_index - fill_index,
             "ambiguous": ambiguous,
+            "contracts": size,
         })
 
     out = pd.concat(
@@ -143,16 +184,17 @@ def simulate(orders: pd.DataFrame, bars: pd.DataFrame, config: BacktestConfig | 
 _RESULT_COLUMNS = [
     "filled", "entry_ts", "entry_fill", "exit_ts", "exit_price", "exit_reason",
     "points", "risk_points", "r_multiple", "gross_pnl", "net_pnl",
-    "bars_held", "ambiguous",
+    "bars_held", "ambiguous", "contracts",
 ]
 
 
-def _unfilled(order: pd.Series) -> dict:
+def _unfilled(order: pd.Series, reason: str = "expired") -> dict:
     return {
         "filled": False, "entry_ts": pd.NaT, "entry_fill": np.nan,
-        "exit_ts": pd.NaT, "exit_price": np.nan, "exit_reason": "expired",
+        "exit_ts": pd.NaT, "exit_price": np.nan, "exit_reason": reason,
         "points": np.nan, "risk_points": np.nan, "r_multiple": np.nan,
         "gross_pnl": 0.0, "net_pnl": 0.0, "bars_held": 0, "ambiguous": False,
+        "contracts": 0,
     }
 
 

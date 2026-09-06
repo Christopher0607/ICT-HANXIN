@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from .data import bar_duration
 from .events import BEARISH, BULLISH, make_events
 from .sessions import in_window, session_ranges
 
@@ -79,6 +80,7 @@ def find_po3(
     if window.empty:
         return make_events([], PO3_COLUMNS)
 
+    step = bar_duration(df)
     rows = []
     for trading_date, day in window.groupby("trading_date", sort=True):
         if trading_date not in ranges.index:
@@ -111,21 +113,21 @@ def find_po3(
             # Sweep of the range high -> Judas up -> expect distribution DOWN.
             if high_intact and high > range_high + min_penetration and close < range_high:
                 rows.append(_po3_row(bar, idx, trading_date, range_high, range_low,
-                                     BEARISH, range_high, high, high - range_high))
+                                     BEARISH, range_high, high, high - range_high, step))
                 break
             # Sweep of the range low -> Judas down -> expect distribution UP.
             if low_intact and low < range_low - min_penetration and close > range_low:
                 rows.append(_po3_row(bar, idx, trading_date, range_high, range_low,
-                                     BULLISH, range_low, low, range_low - low))
+                                     BULLISH, range_low, low, range_low - low, step))
                 break
 
     return make_events(rows, PO3_COLUMNS)
 
 
 def _po3_row(bar, idx, trading_date, range_high, range_low, direction,
-             swept_level, extreme, penetration) -> dict:
+             swept_level, extreme, penetration, step) -> dict:
     return {
-        "ts": bar["ts"], "confirmed_at": bar["ts"],
+        "ts": bar["ts"], "confirmed_at": bar["ts"] + step,
         "kind": "po3_judas", "direction": direction,
         "trading_date": trading_date,
         "range_high": range_high, "range_low": range_low,

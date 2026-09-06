@@ -82,3 +82,69 @@ def percentile_of(value: float, control: dict) -> float | None:
     if value <= mid:
         return 5.0 + 45.0 * (value - lo) / (mid - lo) if mid > lo else 50.0
     return 50.0 + 45.0 * (value - mid) / (hi - mid) if hi > mid else 50.0
+
+
+def randomized_totals(
+    orders: pd.DataFrame, bars: pd.DataFrame,
+    config: BacktestConfig | None = None, runs: int = 100, seed: int = 0,
+) -> np.ndarray:
+    """Total P&L of ``runs`` direction-randomised copies of these setups.
+
+    Same setups, same entries, same risk and reward distances — only the
+    direction is a coin flip. Each value is therefore a draw from "what this
+    strategy's machinery produces with no directional edge at all".
+    """
+    if orders.empty:
+        return np.array([])
+    rng = np.random.default_rng(seed)
+    entry = orders["entry_price"].to_numpy()
+    risk = np.abs(entry - orders["stop_price"].to_numpy())
+    reward = np.abs(orders["target_price"].to_numpy() - entry)
+
+    totals = []
+    for _ in range(runs):
+        flipped = orders.copy()
+        sign = rng.choice([-1, 1], size=len(orders))
+        flipped["direction"] = sign
+        flipped["stop_price"] = entry - sign * risk
+        flipped["target_price"] = entry + sign * reward
+        stats = summarize(simulate(flipped, bars, config))
+        totals.append(stats.get("total_pnl", 0.0))
+    return np.array(totals)
+
+
+def best_of_n_null(null_totals: dict[str, np.ndarray], actual: dict[str, float]) -> dict:
+    """Is the best strategy better than the best of N strategies with no edge?
+
+    Testing seven models and reporting the winner is itself a form of
+    overfitting: the maximum of seven noisy draws is biased upward even when
+    every draw has zero expectation. This quantifies that bias directly.
+
+    For each simulation round, take the best of the seven randomised
+    strategies. That yields the distribution of "how good the apparent winner
+    looks when nothing has an edge". If the real winner does not clear it, the
+    winner is selection noise rather than a discovery.
+    """
+    names = [n for n, arr in null_totals.items() if len(arr)]
+    if not names or not actual:
+        return {}
+
+    depth = min(len(null_totals[n]) for n in names)
+    stacked = np.vstack([null_totals[n][:depth] for n in names])
+    per_round_best = stacked.max(axis=0)
+
+    best_name = max(actual, key=actual.get)
+    best_value = actual[best_name]
+
+    return {
+        "n_strategies": len(names),
+        "rounds": int(depth),
+        "best_strategy": best_name,
+        "best_actual_pnl": float(best_value),
+        "null_best_median": float(np.median(per_round_best)),
+        "null_best_p95": float(np.percentile(per_round_best, 95)),
+        "null_single_median": float(np.median(stacked)),
+        # Share of rounds where pure noise produced a "winner" at least this good.
+        "p_value": float((per_round_best >= best_value).mean()),
+        "survives": bool((per_round_best >= best_value).mean() < 0.05),
+    }

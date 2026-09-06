@@ -103,6 +103,17 @@ def load(timeframe: str, with_time_columns: bool = True) -> pd.DataFrame:
     return add_time_columns(df) if with_time_columns else df
 
 
+def bar_duration(df: pd.DataFrame) -> pd.Timedelta:
+    """Infer the bar interval from the most common timestamp spacing.
+
+    Detectors need this to answer "when did this bar close?", which is when a
+    close-based pattern first became knowable.
+    """
+    if len(df) < 2:
+        raise ValueError("need at least two bars to infer bar duration")
+    return pd.Timedelta(df["ts"].diff().dropna().mode().iloc[0])
+
+
 def resample_1m_to_5m(df1m: pd.DataFrame) -> pd.DataFrame:
     """Aggregate 1-minute bars to 5-minute bars on UTC epoch boundaries.
 

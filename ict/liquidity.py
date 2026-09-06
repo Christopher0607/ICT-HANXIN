@@ -21,6 +21,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .data import bar_duration
 from .events import BEARISH, BULLISH, make_events
 from .swings import find_swings
 
@@ -49,6 +50,7 @@ def find_sweeps(
         return make_events([], SWEEP_COLUMNS)
 
     ts = df["ts"].reset_index(drop=True)
+    step = bar_duration(df)
     high = df["high"].to_numpy()
     low = df["low"].to_numpy()
     close = df["close"].to_numpy()
@@ -68,7 +70,7 @@ def find_sweeps(
             level, swept_ts = pending_high
             if high[i] > level + min_penetration and close[i] < level:
                 rows.append({
-                    "ts": ts.iloc[i], "confirmed_at": ts.iloc[i],
+                    "ts": ts.iloc[i], "confirmed_at": ts.iloc[i] + step,
                     "kind": "sweep", "direction": BEARISH,
                     "level": level, "extreme": float(high[i]),
                     "penetration": float(high[i] - level),
@@ -82,7 +84,7 @@ def find_sweeps(
             level, swept_ts = pending_low
             if low[i] < level - min_penetration and close[i] > level:
                 rows.append({
-                    "ts": ts.iloc[i], "confirmed_at": ts.iloc[i],
+                    "ts": ts.iloc[i], "confirmed_at": ts.iloc[i] + step,
                     "kind": "sweep", "direction": BULLISH,
                     "level": level, "extreme": float(low[i]),
                     "penetration": float(level - low[i]),
@@ -131,7 +133,8 @@ def find_level_sweeps(
         return make_events([], SWEEP_COLUMNS)
     ts = df["ts"].reset_index(drop=True)
     out = pd.DataFrame({
-        "ts": ts.iloc[idx].to_numpy(), "confirmed_at": ts.iloc[idx].to_numpy(),
+        "ts": ts.iloc[idx].to_numpy(),
+        "confirmed_at": ts.iloc[idx].to_numpy() + bar_duration(df),
         "kind": f"sweep_{level_col}", "direction": direction,
         "level": level[idx], "extreme": extreme[idx],
         "penetration": penetration[idx], "swept_ts": pd.NaT,
