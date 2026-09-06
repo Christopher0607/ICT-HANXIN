@@ -1,0 +1,682 @@
+<title>PO3 策略拆解</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  color-scheme:light;
+  --ground:#f5f7f9; --panel:#ffffff; --panel-2:#eef1f5;
+  --ink:#101720; --ink-2:#5a6572; --ink-3:#8a95a3;
+  --rule:#dce1e7; --rule-2:#eaedf1;
+  --accent:#1f4b8f; --loss:#c0322f; --gain:#15734a; --warn:#9a6400;
+  --acc:#4a3aa7;        /* accumulation */
+  --manip:#c0322f;      /* manipulation / judas */
+  --dist:#15734a;       /* distribution */
+  --fvg:#eda100;        /* fair value gap */
+  --up:#15734a; --down:#c0322f;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --body:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --display:"Fraunces",Georgia,"Times New Roman",serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  color-scheme:dark;
+  --ground:#0f1319; --panel:#161b22; --panel-2:#1d232c;
+  --ink:#eef1f5; --ink-2:#9aa4b2; --ink-3:#6b7684;
+  --rule:#262d37; --rule-2:#1e242d;
+  --accent:#6ea0e6; --loss:#e8706c; --gain:#3fa877; --warn:#d4a03c;
+  --acc:#9085e9; --manip:#e8706c; --dist:#3fa877; --fvg:#c98500;
+  --up:#3fa877; --down:#e8706c;
+}}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --ground:#0f1319; --panel:#161b22; --panel-2:#1d232c;
+  --ink:#eef1f5; --ink-2:#9aa4b2; --ink-3:#6b7684;
+  --rule:#262d37; --rule-2:#1e242d;
+  --accent:#6ea0e6; --loss:#e8706c; --gain:#3fa877; --warn:#d4a03c;
+  --acc:#9085e9; --manip:#e8706c; --dist:#3fa877; --fvg:#c98500;
+  --up:#3fa877; --down:#e8706c;
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font-family:var(--body);
+  font-size:16px;line-height:1.65;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1160px;margin:0 auto;padding:0 24px 96px}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0}
+h1{font-size:clamp(2rem,4.2vw,3.1rem);font-weight:600;line-height:1.1;letter-spacing:-.02em}
+h2{font-size:1.58rem;font-weight:600;line-height:1.22;letter-spacing:-.01em}
+h3{font-size:1.05rem;font-weight:600}
+p{margin:0}
+code{font-family:var(--mono);font-size:.92em;background:var(--panel-2);
+  padding:1px 5px;border-radius:2px}
+.eyebrow{font-family:var(--mono);font-size:.7rem;font-weight:500;
+  letter-spacing:.13em;text-transform:uppercase;color:var(--accent)}
+.muted{color:var(--ink-2)} .small{font-size:.875rem;line-height:1.6}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.loss{color:var(--loss)} .gain{color:var(--gain)}
+header.masthead{padding:60px 0 36px;border-bottom:2px solid var(--ink);
+  display:flex;flex-direction:column;gap:16px}
+.deck{font-size:1.14rem;line-height:1.6;color:var(--ink-2);max-width:62ch}
+section{padding-top:54px;display:flex;flex-direction:column;gap:20px}
+.sec-head{display:flex;flex-direction:column;gap:10px;max-width:70ch}
+.panel{background:var(--panel);border:1px solid var(--rule);padding:24px}
+figure{margin:0;display:flex;flex-direction:column;gap:14px}
+figcaption{font-size:.86rem;color:var(--ink-2);line-height:1.6;max-width:78ch}
+.scroll{overflow-x:auto}
+svg{display:block;max-width:100%;height:auto}
+.steps{display:flex;flex-direction:column;border:1px solid var(--rule)}
+.step{background:var(--panel);display:grid;grid-template-columns:44px 1fr;
+  gap:4px 18px;padding:18px 22px;border-bottom:1px solid var(--rule)}
+.step:last-child{border-bottom:none}
+.step .n{font-family:var(--mono);font-size:.95rem;font-weight:600;color:var(--accent);
+  padding-top:2px}
+.step .why{font-size:.86rem;color:var(--ink-2);line-height:1.6}
+.step code{font-size:.8rem}
+table{border-collapse:collapse;width:100%;font-family:var(--mono);
+  font-size:.8rem;font-variant-numeric:tabular-nums}
+th,td{text-align:right;padding:9px 11px;border-bottom:1px solid var(--rule-2);white-space:nowrap}
+th{font-weight:500;font-size:.68rem;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--ink-3);border-bottom:1px solid var(--rule)}
+th:first-child,td:first-child{text-align:left}
+.legend{display:flex;flex-wrap:wrap;gap:8px 20px;font-family:var(--mono);
+  font-size:.76rem;color:var(--ink-2)}
+.legend span{display:inline-flex;align-items:center;gap:7px}
+.key{width:12px;height:12px;border-radius:2px;flex:none}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:20px}
+.callout{border-left:3px solid var(--accent);padding-left:18px;
+  display:flex;flex-direction:column;gap:8px}
+.callout.warnbar{border-left-color:var(--warn)}
+.tradecard{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));
+  gap:1px;background:var(--rule);border:1px solid var(--rule)}
+.tradecard div{background:var(--panel);padding:13px 15px;display:flex;
+  flex-direction:column;gap:3px}
+.tradecard .k{font-family:var(--mono);font-size:.64rem;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink-3)}
+.tradecard .v{font-family:var(--mono);font-size:1.02rem;font-weight:600;
+  font-variant-numeric:tabular-nums}
+footer{margin-top:70px;padding-top:24px;border-top:1px solid var(--rule);
+  font-size:.83rem;color:var(--ink-3);display:flex;flex-direction:column;gap:8px}
+@media (max-width:640px){.step{grid-template-columns:1fr}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <span class="eyebrow">ICT 第 12 堂課 · Power of Three</span>
+  <h1>PO3 策略是怎麼運作的</h1>
+  <p class="deck">三個階段、五道關卡、一天最多一張單。下面用真實的回測交易
+    （2026-05-21，實際 K 棒、實際價格）把整條流程走一遍，
+    包括為什麼 690 個交易日最後只剩 35 筆。</p>
+</header>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">核心概念</span>
+    <h2>累積 → 操縱 → 派發</h2>
+    <p class="muted">PO3 假設一個交易日分成三段：先在一個安靜的區間裡建倉（累積），
+      然後往<strong>錯誤的方向</strong>捅一下、把停損掃掉（操縱），
+      再往真正的方向走（派發）。</p>
+    <p class="muted">要交易的推論就是那個反轉：<strong>掃掉區間高點是看跌訊號，
+      掃掉低點是看漲訊號。</strong>把新高讀成強勢，方向剛好相反 ——
+      而且正好是在這個型態有效的那些天做反。</p>
+  </div>
+
+  <div class="panel">
+    <figure>
+      <svg viewBox="0 0 1000 360" role="img" aria-label="PO3 三階段示意：價格先在亞洲時段區間內累積，紐約開盤後向下掃掉區間低點的停損，再反轉向上派發">
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
+                  markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+          </marker>
+          <marker id="ah-manip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
+                  markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--manip)"/>
+          </marker>
+          <marker id="ah-dist" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
+                  markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--dist)"/>
+          </marker>
+        </defs>
+
+        <!-- accumulation range band -->
+        <rect x="70" y="150" width="850" height="60" fill="var(--acc)" opacity="0.07"/>
+        <line x1="70" y1="150" x2="920" y2="150" stroke="var(--acc)" stroke-width="1.5"/>
+        <line x1="70" y1="210" x2="920" y2="210" stroke="var(--acc)" stroke-width="1.5"/>
+        <rect x="80" y="150" width="220" height="60" fill="var(--acc)" opacity="0.14"/>
+        <text x="76" y="143" fill="var(--acc)" font-size="12" font-family="var(--mono)">區間高點</text>
+        <text x="76" y="226" fill="var(--acc)" font-size="12" font-family="var(--mono)">區間低點</text>
+
+        <!-- resting liquidity below the low -->
+        <g stroke="var(--manip)" stroke-width="1.6" opacity=".55">
+          <line x1="312" y1="228" x2="330" y2="228"/><line x1="340" y1="234" x2="358" y2="234"/>
+          <line x1="368" y1="230" x2="386" y2="230"/><line x1="396" y1="238" x2="414" y2="238"/>
+        </g>
+        <text x="312" y="256" fill="var(--manip)" font-size="11.5" font-family="var(--mono)">停損掛在這裡</text>
+
+        <!-- price path -->
+        <polyline fill="none" stroke="var(--acc)" stroke-width="2.4" stroke-linejoin="round"
+          points="80,192 112,164 142,201 172,169 202,203 232,174 262,197 300,181"/>
+        <polyline fill="none" stroke="var(--manip)" stroke-width="2.4" stroke-linejoin="round"
+          points="300,181 320,212 340,246 362,266 384,242 404,206 424,186"/>
+        <polyline fill="none" stroke="var(--dist)" stroke-width="2.6" stroke-linejoin="round"
+          points="424,186 466,168 512,150 566,138 622,118 692,104 772,92 856,78 900,70"/>
+
+        <!-- sweep marker -->
+        <circle cx="362" cy="266" r="5" fill="var(--manip)"/>
+        <line x1="362" y1="266" x2="362" y2="300" stroke="var(--manip)" stroke-width="1"
+              stroke-dasharray="3 3"/>
+        <text x="362" y="316" fill="var(--manip)" font-size="12" font-family="var(--mono)"
+              text-anchor="middle" font-weight="600">猶大擺動</text>
+        <text x="362" y="332" fill="var(--ink-3)" font-size="11" font-family="var(--mono)"
+              text-anchor="middle">影線穿出 · 收盤回到區間內</text>
+
+        <!-- phase labels -->
+        <text x="190" y="60" fill="var(--acc)" font-size="14" font-family="var(--mono)"
+              text-anchor="middle" font-weight="600">1 · 累積</text>
+        <text x="190" y="79" fill="var(--ink-3)" font-size="11.5" font-family="var(--mono)"
+              text-anchor="middle">亞洲時段 20:00–00:00 ET</text>
+        <text x="362" y="60" fill="var(--manip)" font-size="14" font-family="var(--mono)"
+              text-anchor="middle" font-weight="600">2 · 操縱</text>
+        <text x="362" y="79" fill="var(--ink-3)" font-size="11.5" font-family="var(--mono)"
+              text-anchor="middle">09:30–11:00 ET</text>
+        <text x="680" y="60" fill="var(--dist)" font-size="14" font-family="var(--mono)"
+              text-anchor="middle" font-weight="600">3 · 派發</text>
+        <text x="680" y="79" fill="var(--ink-3)" font-size="11.5" font-family="var(--mono)"
+              text-anchor="middle">真正的方向 · 16:00 ET 前平倉</text>
+
+        <!-- the inversion, stated on the drawing -->
+        <line x1="404" y1="270" x2="404" y2="200" stroke="var(--dist)" stroke-width="2"
+              marker-end="url(#ah-dist)"/>
+        <text x="418" y="252" fill="var(--dist)" font-size="12.5" font-family="var(--mono)"
+              font-weight="600">掃低點 → 做多</text>
+        <text x="418" y="270" fill="var(--ink-3)" font-size="11" font-family="var(--mono)">
+          （掃高點 → 做空，鏡像）</text>
+
+        <!-- phase dividers -->
+        <line x1="300" y1="92" x2="300" y2="292" stroke="var(--ink-3)" stroke-width="1"
+              stroke-dasharray="2 5" opacity=".55"/>
+        <line x1="424" y1="92" x2="424" y2="292" stroke="var(--ink-3)" stroke-width="1"
+              stroke-dasharray="2 5" opacity=".55"/>
+      </svg>
+      <figcaption>三個階段與它們之間的因果：停損堆在區間低點下方，所以價格先去拿它，
+        拿完才走真正的方向。<code>find_po3</code> 回傳的 <code>direction</code>
+        是<strong>預期的派發方向</strong>，不是掃針的方向 —— 這個反號在
+        <code>tests/test_po3.py</code> 有專門的測試鎖住。</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">時序</span>
+    <h2>五道關卡，每一道都有時間上限</h2>
+    <p class="muted">策略不是「看到型態就進場」。它是一串必須<strong>按順序、在時限內</strong>
+      發生的事件，任何一步沒發生，這一天就結束了。時間全部是紐約時間。</p>
+  </div>
+
+  <div class="panel scroll">
+    <figure>
+      <svg viewBox="0 0 1080 300" role="img" aria-label="PO3 一日時間軸：亞洲時段建立區間、00:00 至 09:30 區間必須保持完整、09:30 至 11:00 掃針、12:00 前結構突破確認、15:00 限價單失效、16:00 平倉">
+        <defs>
+          <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
+                  markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- timeline ribbon -->
+        <rect x="60" y="120" width="180" height="34" fill="var(--acc)" opacity=".22"/>
+        <rect x="240" y="120" width="250" height="34" fill="var(--ink-3)" opacity=".12"/>
+        <rect x="490" y="120" width="170" height="34" fill="var(--manip)" opacity=".22"/>
+        <rect x="660" y="120" width="150" height="34" fill="var(--dist)" opacity=".22"/>
+        <rect x="810" y="120" width="150" height="34" fill="var(--fvg)" opacity=".20"/>
+        <rect x="960" y="120" width="60" height="34" fill="var(--ink-3)" opacity=".18"/>
+        <line x1="60" y1="154" x2="1020" y2="154" stroke="currentColor" stroke-width="1.5"
+              opacity=".45"/>
+
+        <!-- ticks -->
+        <g font-family="var(--mono)" font-size="11.5" fill="var(--ink-2)" text-anchor="middle">
+          <text x="60" y="176">20:00</text>
+          <text x="240" y="176">00:00</text>
+          <text x="490" y="176">09:30</text>
+          <text x="660" y="176">11:00</text>
+          <text x="810" y="176">12:00</text>
+          <text x="960" y="176">15:00</text>
+          <text x="1020" y="176">16:00</text>
+        </g>
+        <g stroke="currentColor" stroke-width="1" opacity=".4">
+          <line x1="60" y1="154" x2="60" y2="164"/><line x1="240" y1="154" x2="240" y2="164"/>
+          <line x1="490" y1="154" x2="490" y2="164"/><line x1="660" y1="154" x2="660" y2="164"/>
+          <line x1="810" y1="154" x2="810" y2="164"/><line x1="960" y1="154" x2="960" y2="164"/>
+          <line x1="1020" y1="154" x2="1020" y2="164"/>
+        </g>
+
+        <!-- segment labels above -->
+        <g font-family="var(--mono)" font-size="12" text-anchor="middle">
+          <text x="150" y="112" fill="var(--acc)" font-weight="600">亞洲時段</text>
+          <text x="150" y="96" fill="var(--ink-3)" font-size="11">建立區間高低</text>
+          <text x="365" y="112" fill="var(--ink-2)" font-weight="600">區間必須保持完整</text>
+          <text x="365" y="96" fill="var(--ink-3)" font-size="11">倫敦先掃走就作廢</text>
+          <text x="575" y="112" fill="var(--manip)" font-weight="600">掃針視窗</text>
+          <text x="735" y="112" fill="var(--dist)" font-weight="600">等 MSB 確認</text>
+          <text x="885" y="112" fill="var(--fvg)" font-weight="600">限價單等成交</text>
+          <text x="990" y="112" fill="var(--ink-2)" font-weight="600">平倉</text>
+        </g>
+
+        <!-- gates below -->
+        <g font-family="var(--mono)" font-size="11" fill="var(--ink-3)">
+          <text x="60" y="206">關卡 1</text>
+          <text x="60" y="222" fill="var(--ink-2)">區間 10–400 點</text>
+          <text x="240" y="206">關卡 2</text>
+          <text x="240" y="222" fill="var(--ink-2)">該邊尚未被掃</text>
+          <text x="490" y="206">關卡 3</text>
+          <text x="490" y="222" fill="var(--ink-2)">影線穿出、收盤回內</text>
+          <text x="660" y="206">關卡 4</text>
+          <text x="660" y="222" fill="var(--ink-2)">結構突破 + 留下 FVG</text>
+          <text x="810" y="206">關卡 5</text>
+          <text x="810" y="222" fill="var(--ink-2)">價格回到 FVG 才成交</text>
+        </g>
+        <g stroke="currentColor" stroke-width="1" opacity=".3">
+          <line x1="60" y1="186" x2="60" y2="196"/><line x1="240" y1="186" x2="240" y2="196"/>
+          <line x1="490" y1="186" x2="490" y2="196"/><line x1="660" y1="186" x2="660" y2="196"/>
+          <line x1="810" y1="186" x2="810" y2="196"/>
+        </g>
+
+        <!-- rejection arrow -->
+        <line x1="490" y1="262" x2="900" y2="262" stroke="var(--loss)" stroke-width="1.6"
+              stroke-dasharray="5 4"/>
+        <text x="500" y="254" fill="var(--loss)" font-size="11.5" font-family="var(--mono)">
+          任何一關沒過 → 這天不交易，不會補做</text>
+        <text x="500" y="282" fill="var(--ink-3)" font-size="11" font-family="var(--mono)">
+          690 個交易日裡，655 天在這條線上被淘汰</text>
+      </svg>
+      <figcaption>時間窗全部是紐約時間，由 <code>zoneinfo</code> 換算，所以夏令時自動處理。
+        亞洲時段 20:00 開始，屬於<strong>隔天</strong>的 CME 交易日 ——
+        這是 <code>trading_date</code> 在 18:00 ET 換日的原因。</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">真實交易</span>
+    <h2>2026-05-21：一筆走完全程的單</h2>
+    <p class="muted">下面是回測裡真正發生的一天，K 棒是實際的 5 分鐘資料，
+      所有價位都是程式算出來的原始數字，沒有美化。</p>
+  </div>
+
+  <div class="tradecard">
+    <div><span class="k">亞洲區間</span><span class="v">29171 – 29381.5</span></div>
+    <div><span class="k">掃低點</span><span class="v loss">10:25 → 29141.75</span></div>
+    <div><span class="k">結構突破</span><span class="v">11:50 CHoCH</span></div>
+    <div><span class="k">進場（FVG 中線）</span><span class="v">29217.75</span></div>
+    <div><span class="k">停損</span><span class="v loss">29137.00</span></div>
+    <div><span class="k">停利（區間高）</span><span class="v gain">29381.50</span></div>
+    <div><span class="k">結果</span><span class="v gain">+2.03R · $970.50</span></div>
+  </div>
+
+  <div class="panel">
+    <figure>
+      <div class="legend">
+        <span><span class="key" style="background:var(--acc);opacity:.35"></span>亞洲區間</span>
+        <span><span class="key" style="background:var(--fvg);opacity:.55"></span>FVG（進場區）</span>
+        <span><span class="key" style="background:var(--manip)"></span>掃針極值 / 停損</span>
+        <span><span class="key" style="background:var(--dist)"></span>停利</span>
+        <span><span class="key" style="background:var(--accent)"></span>限價進場</span>
+      </div>
+      <div class="scroll"><div id="chart-win"></div></div>
+      <figcaption><strong>注意停損的位置。</strong>掃針那根 K 的最低點是 29141.75，
+        但價格在 CHoCH 之前又往下走到了 <span class="mono">29139.00</span>。
+        停損放在<strong>那個</strong>低點外面（29137），不是掃針 K 自己的低點 ——
+        用掃針 K 會把停損放在錯的一側。這正是我在建這套策略時修掉的一個 bug。</figcaption>
+    </figure>
+  </div>
+
+  <div class="steps">
+    <div class="step"><span class="n">1</span>
+      <div><h3>亞洲時段建立區間：29171.00 – 29381.50</h3>
+        <p class="why">20:00–23:55 ET 的最高與最低。區間 210.5 點，落在 10–400 點的合理範圍內。
+          區間只有在最後一根 K <strong>收盤後</strong>才能用（<code>available_at</code>）。</p></div></div>
+    <div class="step"><span class="n">2</span>
+      <div><h3>00:00 → 09:30 之間，低點沒有被碰過</h3>
+        <p class="why">如果倫敦時段就已經把 29171 掃掉，那些停損早就沒了，
+          紐約再捅一次不是新的掠奪。<code>require_unswept</code> 這一關把
+          399 個掃針日砍到 118 個 —— 是最嚴格的一關。</p></div></div>
+    <div class="step"><span class="n">3</span>
+      <div><h3>10:25 掃針：影線到 29141.75，收盤回到區間內</h3>
+        <p class="why">穿出 29.25 點然後收回。<strong>影線穿出 + 收盤回內 = 掃針</strong>；
+          如果<strong>收盤</strong>也在外面，那是真突破，不是掃針 —— 同一個價位，相反的結論。
+          掃的是低點，所以預期方向是<span class="gain">做多</span>。</p></div></div>
+    <div class="step"><span class="n">4</span>
+      <div><h3>11:50 CHoCH：向上突破結構，留下 FVG 29216.00–29219.50</h3>
+        <p class="why">沒有這一關，策略就是純粹逆勢接刀，每個趨勢日都會虧。
+          突破那條腿留下的公允價值缺口就是進場區。
+          118 個掃針日裡只有 51 天走到這一步。</p></div></div>
+    <div class="step"><span class="n">5</span>
+      <div><h3>限價掛在 FVG 中線 29217.75，12:23 成交</h3>
+        <p class="why">掛單等回撤，不追。中線（consequent encroachment）比缺口邊緣保守。
+          51 張單裡有 16 張價格從來沒回來，直接過期 ——
+          這些<strong>沒被丟掉</strong>，它們算在成交率裡（69%）。</p></div></div>
+    <div class="step"><span class="n">6</span>
+      <div><h3>13:11 觸及 29381.50 停利，+2.03R</h3>
+        <p class="why">停利設在區間的<strong>另一邊</strong> —— 派發那條腿要去拿的流動性。
+          停損 80.75 點、停利 163.75 點，R:R = 2.03。
+          16:00 ET 一定平倉，不留倉過夜。</p></div></div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">為什麼會虧</span>
+    <h2>同樣的流程，換一天就是 −1R</h2>
+    <p class="muted">2025-06-30 的每一步都跟上面一模一樣 ——
+      掃低點、CHoCH、FVG 進場 —— 差別只在價格後來往哪走。</p>
+  </div>
+  <div class="grid2">
+    <div class="panel">
+      <figure>
+        <div class="scroll"><div id="chart-loss"></div></div>
+        <figcaption class="small">2025-06-30：掃 22804.5 到 22794.25，11:45 CHoCH，
+          13:05 在 22828.50 成交，13:57 停損出場。<span class="loss">−1.01R</span></figcaption>
+      </figure>
+    </div>
+    <div class="panel">
+      <figure>
+        <div class="scroll"><div id="chart-rr"></div></div>
+        <figcaption class="small">51 張單在<strong>下單當下</strong>的計畫報酬風險比。
+          中位數 1.43，但有 <strong>16 張低於 1:1</strong>，最低的一張只有 0.02。</figcaption>
+      </figure>
+    </div>
+  </div>
+
+  <div class="callout warnbar">
+    <p><strong>這就是虧損的機制。</strong>停損放在掃針極值外面（距離由市場決定，
+      經常很寬），停利放在區間另一邊（距離也由市場決定，經常很近）。
+      兩個距離互不相干，所以三成的單子在下的時候<strong>賠率就已經不到 1:1</strong>。</p>
+    <p class="small muted">35 筆成交裡有 16 筆是完整的 −1R 停損，
+      而獲利的那些有好幾筆只有 +0.25R（停利離得太近）。
+      勝率 46%、中位數 R:R 1.43，紙上算起來剛好過打平線（41%）——
+      實際上輸在這個不對稱：<strong>虧損總是吃滿，獲利經常被剪掉</strong>。</p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">漏斗</span>
+    <h2>690 個交易日 → 35 筆交易</h2>
+    <p class="muted">每一關淘汰掉多少天。看得出來這套策略有多挑 ——
+      以及為什麼樣本外只有 35 筆交易，統計上本來就很難說什麼。</p>
+  </div>
+  <div class="panel">
+    <figure>
+      <div class="scroll"><div id="chart-funnel"></div></div>
+      <figcaption>樣本外 2024-01 → 2026-08。最大的兩道關卡是
+        <strong>「該邊之前沒被掃過」</strong>（399 → 118）和
+        <strong>「12:00 前 MSB 確認」</strong>（118 → 51）。
+        兩者都是為了避免假訊號而加的，代價是樣本數少到讓結論很脆弱。</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">程式對照</span>
+    <h2>每一步在哪個檔案</h2>
+  </div>
+  <div class="panel scroll">
+    <table>
+      <thead><tr><th>步驟</th><th>函式</th><th>檔案</th></tr></thead>
+      <tbody>
+        <tr><td>亞洲區間高低</td><td>session_ranges</td><td>ict/sessions.py</td></tr>
+        <tr><td>區間尚未被掃 + 掃針偵測</td><td>find_po3</td><td>ict/po3.py</td></tr>
+        <tr><td>結構突破 CHoCH / BOS</td><td>find_msb</td><td>ict/structure.py</td></tr>
+        <tr><td>公允價值缺口</td><td>find_fvgs</td><td>ict/fvg.py</td></tr>
+        <tr><td>組裝訂單（進場/停損/停利）</td><td>_build_order</td><td>strategies/po3_judas.py</td></tr>
+        <tr><td>一天一張單</td><td>one_trade_per_day</td><td>strategies/base.py</td></tr>
+        <tr><td>1 分鐘解析度成交</td><td>simulate</td><td>backtest/engine.py</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <p class="small">所有偵測器都回傳 <code>confirmed_at</code> ——
+      這個型態<strong>最早在哪一根 K 收盤後才可知</strong>。
+      回測引擎只吃已經確認的事件。上面那張 10:25 的掃針，
+      <code>confirmed_at</code> 是 <span class="mono">10:30</span>（那根 K 的收盤），
+      不是 10:25。差這一根 K，整份回測的正負號會反過來。</p>
+  </div>
+</section>
+
+<footer>
+  <p>資料：Databento GLBX.MDP3 <code>NQ.v.0</code>，5 分鐘訊號 / 1 分鐘成交。
+    每筆固定風險 $500，MNQ 微型合約，含手續費與停損滑價。</p>
+  <p>兩筆範例交易是回測裡真實出現的，不是示意圖。
+    整體結果請看<a href="https://claude.ai/code/artifact/97822a07-7616-42a1-b874-5a404d67f460">七套策略完整報告</a> ——
+    PO3 樣本外是 −$1,159。</p>
+</footer>
+
+</div>
+
+<script>window.__PO3__={"win":{"date":"2026-05-21","bars":[{"t":"18:00","m":1080,"o":29253.0,"h":29278.5,"l":29220.0,"c":29221.0},{"t":"18:05","m":1085,"o":29219.0,"h":29230.0,"l":29119.5,"c":29143.25},{"t":"18:10","m":1090,"o":29144.0,"h":29172.5,"l":29113.0,"c":29156.75},{"t":"18:15","m":1095,"o":29160.25,"h":29177.0,"l":29132.5,"c":29145.25},{"t":"18:20","m":1100,"o":29141.25,"h":29157.0,"l":29118.5,"c":29146.5},{"t":"18:25","m":1105,"o":29146.0,"h":29174.0,"l":29145.0,"c":29172.0},{"t":"18:30","m":1110,"o":29169.5,"h":29186.5,"l":29162.0,"c":29179.0},{"t":"18:35","m":1115,"o":29179.0,"h":29184.5,"l":29157.25,"c":29181.5},{"t":"18:40","m":1120,"o":29182.75,"h":29189.25,"l":29170.25,"c":29183.75},{"t":"18:45","m":1125,"o":29183.5,"h":29191.0,"l":29174.75,"c":29184.75},{"t":"18:50","m":1130,"o":29182.75,"h":29184.0,"l":29161.75,"c":29173.0},{"t":"18:55","m":1135,"o":29174.75,"h":29192.0,"l":29170.25,"c":29191.5},{"t":"19:00","m":1140,"o":29191.75,"h":29208.0,"l":29188.0,"c":29199.0},{"t":"19:05","m":1145,"o":29198.0,"h":29206.0,"l":29194.0,"c":29200.75},{"t":"19:10","m":1150,"o":29202.0,"h":29225.0,"l":29200.25,"c":29205.25},{"t":"19:15","m":1155,"o":29206.25,"h":29206.75,"l":29183.25,"c":29204.0},{"t":"19:20","m":1160,"o":29203.25,"h":29204.5,"l":29175.0,"c":29179.75},{"t":"19:25","m":1165,"o":29179.25,"h":29187.75,"l":29164.0,"c":29181.5},{"t":"19:30","m":1170,"o":29180.5,"h":29195.25,"l":29173.5,"c":29180.5},{"t":"19:35","m":1175,"o":29183.5,"h":29199.75,"l":29180.5,"c":29190.25},{"t":"19:40","m":1180,"o":29190.75,"h":29198.0,"l":29185.5,"c":29186.75},{"t":"19:45","m":1185,"o":29186.75,"h":29209.0,"l":29178.75,"c":29200.75},{"t":"19:50","m":1190,"o":29204.0,"h":29207.5,"l":29189.5,"c":29202.75},{"t":"19:55","m":1195,"o":29202.25,"h":29206.0,"l":29181.75,"c":29192.25},{"t":"20:00","m":1200,"o":29193.0,"h":29210.75,"l":29178.75,"c":29199.75},{"t":"20:05","m":1205,"o":29201.25,"h":29205.5,"l":29171.0,"c":29198.75},{"t":"20:10","m":1210,"o":29202.25,"h":29213.25,"l":29191.0,"c":29208.5},{"t":"20:15","m":1215,"o":29209.0,"h":29220.0,"l":29177.5,"c":29188.75},{"t":"20:20","m":1220,"o":29190.0,"h":29194.0,"l":29175.75,"c":29187.0},{"t":"20:25","m":1225,"o":29186.5,"h":29194.75,"l":29172.0,"c":29194.75},{"t":"20:30","m":1230,"o":29194.75,"h":29208.0,"l":29182.0,"c":29206.25},{"t":"20:35","m":1235,"o":29205.5,"h":29217.25,"l":29202.0,"c":29207.0},{"t":"20:40","m":1240,"o":29206.5,"h":29219.25,"l":29204.5,"c":29218.25},{"t":"20:45","m":1245,"o":29218.25,"h":29222.0,"l":29205.25,"c":29220.75},{"t":"20:50","m":1250,"o":29220.5,"h":29232.5,"l":29218.0,"c":29230.25},{"t":"20:55","m":1255,"o":29230.5,"h":29230.5,"l":29215.5,"c":29222.0},{"t":"21:00","m":1260,"o":29221.75,"h":29246.0,"l":29221.75,"c":29243.25},{"t":"21:05","m":1265,"o":29244.25,"h":29264.75,"l":29240.5,"c":29264.75},{"t":"21:10","m":1270,"o":29264.0,"h":29281.25,"l":29257.25,"c":29281.0},{"t":"21:15","m":1275,"o":29280.25,"h":29295.5,"l":29263.75,"c":29265.5},{"t":"21:20","m":1280,"o":29268.0,"h":29279.75,"l":29266.25,"c":29273.75},{"t":"21:25","m":1285,"o":29274.0,"h":29274.0,"l":29260.25,"c":29271.0},{"t":"21:30","m":1290,"o":29269.5,"h":29295.0,"l":29262.75,"c":29293.75},{"t":"21:35","m":1295,"o":29293.0,"h":29310.25,"l":29285.5,"c":29294.5},{"t":"21:40","m":1300,"o":29292.0,"h":29320.5,"l":29292.0,"c":29314.5},{"t":"21:45","m":1305,"o":29312.75,"h":29318.5,"l":29307.5,"c":29309.5},{"t":"21:50","m":1310,"o":29309.25,"h":29311.5,"l":29281.0,"c":29286.0},{"t":"21:55","m":1315,"o":29287.5,"h":29320.0,"l":29287.5,"c":29313.25},{"t":"22:00","m":1320,"o":29315.0,"h":29334.75,"l":29312.5,"c":29328.5},{"t":"22:05","m":1325,"o":29328.5,"h":29335.75,"l":29324.75,"c":29335.5},{"t":"22:10","m":1330,"o":29333.75,"h":29340.25,"l":29322.75,"c":29332.0},{"t":"22:15","m":1335,"o":29333.25,"h":29377.25,"l":29330.5,"c":29355.75},{"t":"22:20","m":1340,"o":29356.0,"h":29364.5,"l":29351.25,"c":29354.25},{"t":"22:25","m":1345,"o":29354.25,"h":29363.5,"l":29351.25,"c":29356.0},{"t":"22:30","m":1350,"o":29355.5,"h":29358.25,"l":29340.0,"c":29341.5},{"t":"22:35","m":1355,"o":29341.5,"h":29356.0,"l":29336.0,"c":29353.5},{"t":"22:40","m":1360,"o":29352.5,"h":29355.0,"l":29333.5,"c":29336.75},{"t":"22:45","m":1365,"o":29337.25,"h":29337.25,"l":29319.0,"c":29329.75},{"t":"22:50","m":1370,"o":29330.75,"h":29342.25,"l":29327.5,"c":29330.0},{"t":"22:55","m":1375,"o":29329.25,"h":29334.5,"l":29322.5,"c":29329.0},{"t":"23:00","m":1380,"o":29329.75,"h":29347.0,"l":29325.25,"c":29343.0},{"t":"23:05","m":1385,"o":29343.25,"h":29348.75,"l":29327.0,"c":29348.25},{"t":"23:10","m":1390,"o":29347.0,"h":29356.5,"l":29344.25,"c":29346.75},{"t":"23:15","m":1395,"o":29348.0,"h":29353.25,"l":29335.75,"c":29350.0},{"t":"23:20","m":1400,"o":29349.25,"h":29366.25,"l":29347.75,"c":29361.25},{"t":"23:25","m":1405,"o":29360.0,"h":29363.0,"l":29349.25,"c":29359.75},{"t":"23:30","m":1410,"o":29359.25,"h":29363.25,"l":29351.75,"c":29357.0},{"t":"23:35","m":1415,"o":29357.0,"h":29365.75,"l":29350.75,"c":29361.25},{"t":"23:40","m":1420,"o":29361.25,"h":29381.5,"l":29360.25,"c":29380.25},{"t":"23:45","m":1425,"o":29380.0,"h":29381.0,"l":29368.75,"c":29374.75},{"t":"23:50","m":1430,"o":29374.75,"h":29375.0,"l":29356.25,"c":29359.25},{"t":"23:55","m":1435,"o":29358.75,"h":29365.5,"l":29356.0,"c":29360.75},{"t":"00:00","m":0,"o":29362.75,"h":29377.25,"l":29360.0,"c":29376.25},{"t":"00:05","m":5,"o":29376.5,"h":29390.0,"l":29376.0,"c":29377.25},{"t":"00:10","m":10,"o":29376.0,"h":29384.5,"l":29374.25,"c":29383.25},{"t":"00:15","m":15,"o":29383.75,"h":29390.25,"l":29380.0,"c":29382.25},{"t":"00:20","m":20,"o":29383.5,"h":29396.75,"l":29379.5,"c":29390.0},{"t":"00:25","m":25,"o":29391.0,"h":29414.75,"l":29390.0,"c":29408.25},{"t":"00:30","m":30,"o":29407.0,"h":29409.0,"l":29388.0,"c":29391.5},{"t":"00:35","m":35,"o":29389.75,"h":29395.5,"l":29380.5,"c":29394.0},{"t":"00:40","m":40,"o":29394.0,"h":29405.0,"l":29392.0,"c":29404.0},{"t":"00:45","m":45,"o":29404.0,"h":29405.25,"l":29396.0,"c":29400.0},{"t":"00:50","m":50,"o":29400.0,"h":29411.0,"l":29395.0,"c":29397.25},{"t":"00:55","m":55,"o":29399.0,"h":29428.75,"l":29398.0,"c":29418.25},{"t":"01:00","m":60,"o":29420.75,"h":29427.25,"l":29415.0,"c":29424.0},{"t":"01:05","m":65,"o":29424.0,"h":29439.75,"l":29410.5,"c":29412.25},{"t":"01:10","m":70,"o":29412.5,"h":29418.0,"l":29408.5,"c":29415.0},{"t":"01:15","m":75,"o":29413.5,"h":29422.75,"l":29407.5,"c":29419.25},{"t":"01:20","m":80,"o":29420.0,"h":29427.75,"l":29411.0,"c":29427.0},{"t":"01:25","m":85,"o":29424.5,"h":29425.25,"l":29390.5,"c":29397.0},{"t":"01:30","m":90,"o":29398.0,"h":29398.75,"l":29372.75,"c":29382.75},{"t":"01:35","m":95,"o":29383.25,"h":29396.75,"l":29379.25,"c":29394.0},{"t":"01:40","m":100,"o":29395.0,"h":29396.25,"l":29374.5,"c":29385.25},{"t":"01:45","m":105,"o":29381.5,"h":29386.75,"l":29298.0,"c":29344.75},{"t":"01:50","m":110,"o":29344.25,"h":29372.5,"l":29335.0,"c":29371.25},{"t":"01:55","m":115,"o":29370.5,"h":29374.75,"l":29363.25,"c":29368.0},{"t":"02:00","m":120,"o":29366.25,"h":29383.0,"l":29358.25,"c":29382.5},{"t":"02:05","m":125,"o":29383.25,"h":29393.5,"l":29376.0,"c":29377.5},{"t":"02:10","m":130,"o":29377.0,"h":29382.5,"l":29355.5,"c":29364.25},{"t":"02:15","m":135,"o":29363.75,"h":29372.25,"l":29340.25,"c":29349.5},{"t":"02:20","m":140,"o":29346.0,"h":29389.0,"l":29341.5,"c":29370.0},{"t":"02:25","m":145,"o":29371.25,"h":29375.75,"l":29357.0,"c":29366.5},{"t":"02:30","m":150,"o":29366.0,"h":29376.75,"l":29361.25,"c":29372.75},{"t":"02:35","m":155,"o":29372.5,"h":29372.5,"l":29350.25,"c":29353.0},{"t":"02:40","m":160,"o":29350.0,"h":29351.25,"l":29317.0,"c":29319.25},{"t":"02:45","m":165,"o":29318.0,"h":29321.75,"l":29291.75,"c":29293.0},{"t":"02:50","m":170,"o":29293.25,"h":29308.0,"l":29280.0,"c":29293.75},{"t":"02:55","m":175,"o":29293.0,"h":29302.0,"l":29281.25,"c":29300.25},{"t":"03:00","m":180,"o":29299.0,"h":29305.0,"l":29262.0,"c":29264.5},{"t":"03:05","m":185,"o":29264.0,"h":29287.25,"l":29251.0,"c":29266.0},{"t":"03:10","m":190,"o":29265.0,"h":29269.25,"l":29200.0,"c":29230.75},{"t":"03:15","m":195,"o":29230.25,"h":29233.75,"l":29201.5,"c":29229.25},{"t":"03:20","m":200,"o":29228.0,"h":29262.25,"l":29226.5,"c":29258.5},{"t":"03:25","m":205,"o":29258.75,"h":29267.25,"l":29244.5,"c":29258.0},{"t":"03:30","m":210,"o":29257.5,"h":29278.25,"l":29253.5,"c":29268.75},{"t":"03:35","m":215,"o":29268.75,"h":29284.75,"l":29266.25,"c":29283.0},{"t":"03:40","m":220,"o":29281.75,"h":29289.75,"l":29271.5,"c":29284.5},{"t":"03:45","m":225,"o":29285.0,"h":29302.0,"l":29276.5,"c":29298.0},{"t":"03:50","m":230,"o":29298.5,"h":29324.75,"l":29297.0,"c":29317.25},{"t":"03:55","m":235,"o":29316.25,"h":29333.25,"l":29314.5,"c":29321.25},{"t":"04:00","m":240,"o":29321.5,"h":29350.0,"l":29311.25,"c":29347.0},{"t":"04:05","m":245,"o":29347.5,"h":29380.0,"l":29344.25,"c":29370.5},{"t":"04:10","m":250,"o":29372.25,"h":29433.0,"l":29360.5,"c":29432.0},{"t":"04:15","m":255,"o":29432.75,"h":29464.5,"l":29395.0,"c":29395.25},{"t":"04:20","m":260,"o":29396.25,"h":29400.0,"l":29373.5,"c":29389.25},{"t":"04:25","m":265,"o":29386.75,"h":29423.0,"l":29373.5,"c":29415.5},{"t":"04:30","m":270,"o":29413.75,"h":29416.5,"l":29374.75,"c":29384.25},{"t":"04:35","m":275,"o":29385.25,"h":29388.25,"l":29365.0,"c":29379.0},{"t":"04:40","m":280,"o":29381.0,"h":29393.0,"l":29370.25,"c":29385.25},{"t":"04:45","m":285,"o":29387.25,"h":29389.0,"l":29360.0,"c":29376.0},{"t":"04:50","m":290,"o":29378.5,"h":29387.25,"l":29349.25,"c":29370.25},{"t":"04:55","m":295,"o":29370.25,"h":29386.75,"l":29366.75,"c":29373.25},{"t":"05:00","m":300,"o":29374.0,"h":29390.25,"l":29367.0,"c":29375.0},{"t":"05:05","m":305,"o":29374.25,"h":29403.5,"l":29372.75,"c":29394.25},{"t":"05:10","m":310,"o":29396.0,"h":29419.75,"l":29386.75,"c":29404.25},{"t":"05:15","m":315,"o":29403.75,"h":29414.0,"l":29397.0,"c":29399.75},{"t":"05:20","m":320,"o":29399.0,"h":29420.0,"l":29399.0,"c":29406.75},{"t":"05:25","m":325,"o":29407.0,"h":29429.75,"l":29401.5,"c":29418.75},{"t":"05:30","m":330,"o":29419.0,"h":29429.0,"l":29397.25,"c":29410.0},{"t":"05:35","m":335,"o":29410.25,"h":29415.25,"l":29392.75,"c":29394.0},{"t":"05:40","m":340,"o":29395.75,"h":29405.75,"l":29375.0,"c":29379.0},{"t":"05:45","m":345,"o":29378.0,"h":29395.0,"l":29373.25,"c":29389.0},{"t":"05:50","m":350,"o":29389.75,"h":29395.75,"l":29380.5,"c":29382.5},{"t":"05:55","m":355,"o":29382.25,"h":29388.5,"l":29375.5,"c":29380.25},{"t":"06:00","m":360,"o":29381.5,"h":29392.5,"l":29378.5,"c":29384.25},{"t":"06:05","m":365,"o":29383.5,"h":29388.5,"l":29355.0,"c":29367.5},{"t":"06:10","m":370,"o":29368.0,"h":29386.5,"l":29358.25,"c":29384.75},{"t":"06:15","m":375,"o":29385.5,"h":29393.0,"l":29373.75,"c":29379.75},{"t":"06:20","m":380,"o":29379.75,"h":29384.25,"l":29361.25,"c":29365.25},{"t":"06:25","m":385,"o":29364.75,"h":29369.5,"l":29242.5,"c":29272.0},{"t":"06:30","m":390,"o":29274.0,"h":29289.25,"l":29235.0,"c":29288.5},{"t":"06:35","m":395,"o":29287.5,"h":29296.75,"l":29220.0,"c":29220.0},{"t":"06:40","m":400,"o":29219.0,"h":29257.5,"l":29212.25,"c":29252.0},{"t":"06:45","m":405,"o":29253.25,"h":29257.25,"l":29214.0,"c":29236.25},{"t":"06:50","m":410,"o":29235.0,"h":29253.0,"l":29192.25,"c":29249.5},{"t":"06:55","m":415,"o":29249.25,"h":29257.0,"l":29227.25,"c":29246.5},{"t":"07:00","m":420,"o":29247.25,"h":29258.25,"l":29205.75,"c":29235.0},{"t":"07:05","m":425,"o":29234.5,"h":29238.5,"l":29204.0,"c":29237.0},{"t":"07:10","m":430,"o":29237.25,"h":29259.0,"l":29226.75,"c":29250.0},{"t":"07:15","m":435,"o":29249.0,"h":29280.5,"l":29247.0,"c":29274.75},{"t":"07:20","m":440,"o":29273.0,"h":29293.75,"l":29252.0,"c":29268.5},{"t":"07:25","m":445,"o":29267.5,"h":29278.75,"l":29262.25,"c":29276.0},{"t":"07:30","m":450,"o":29276.0,"h":29286.75,"l":29262.75,"c":29264.75},{"t":"07:35","m":455,"o":29264.75,"h":29268.75,"l":29242.0,"c":29256.5},{"t":"07:40","m":460,"o":29258.5,"h":29265.75,"l":29239.0,"c":29243.5},{"t":"07:45","m":465,"o":29243.0,"h":29271.0,"l":29243.0,"c":29269.0},{"t":"07:50","m":470,"o":29267.5,"h":29277.75,"l":29259.5,"c":29269.0},{"t":"07:55","m":475,"o":29268.0,"h":29268.25,"l":29247.25,"c":29253.25},{"t":"08:00","m":480,"o":29252.75,"h":29266.5,"l":29246.0,"c":29266.0},{"t":"08:05","m":485,"o":29264.5,"h":29268.0,"l":29239.25,"c":29253.5},{"t":"08:10","m":490,"o":29252.25,"h":29253.25,"l":29224.25,"c":29238.5},{"t":"08:15","m":495,"o":29238.0,"h":29261.5,"l":29225.0,"c":29260.75},{"t":"08:20","m":500,"o":29262.0,"h":29262.0,"l":29221.75,"c":29225.0},{"t":"08:25","m":505,"o":29226.25,"h":29242.25,"l":29219.5,"c":29241.75},{"t":"08:30","m":510,"o":29244.25,"h":29292.75,"l":29226.25,"c":29280.25},{"t":"08:35","m":515,"o":29278.5,"h":29281.5,"l":29232.25,"c":29261.75},{"t":"08:40","m":520,"o":29261.0,"h":29268.0,"l":29221.0,"c":29236.25},{"t":"08:45","m":525,"o":29237.0,"h":29244.0,"l":29220.75,"c":29230.5},{"t":"08:50","m":530,"o":29230.25,"h":29233.5,"l":29213.5,"c":29224.75},{"t":"08:55","m":535,"o":29224.0,"h":29230.25,"l":29185.5,"c":29194.0},{"t":"09:00","m":540,"o":29193.5,"h":29244.0,"l":29188.0,"c":29232.0},{"t":"09:05","m":545,"o":29231.75,"h":29239.0,"l":29202.25,"c":29209.75},{"t":"09:10","m":550,"o":29209.75,"h":29220.0,"l":29199.5,"c":29215.75},{"t":"09:15","m":555,"o":29213.5,"h":29215.0,"l":29193.75,"c":29203.75},{"t":"09:20","m":560,"o":29203.5,"h":29205.0,"l":29180.25,"c":29186.75},{"t":"09:25","m":565,"o":29186.75,"h":29221.25,"l":29180.0,"c":29215.5},{"t":"09:30","m":570,"o":29217.25,"h":29266.25,"l":29174.0,"c":29264.5},{"t":"09:35","m":575,"o":29266.5,"h":29268.5,"l":29190.75,"c":29212.5},{"t":"09:40","m":580,"o":29212.0,"h":29264.5,"l":29183.0,"c":29214.0},{"t":"09:45","m":585,"o":29216.25,"h":29252.0,"l":29192.25,"c":29203.25},{"t":"09:50","m":590,"o":29202.75,"h":29298.0,"l":29188.0,"c":29294.5},{"t":"09:55","m":595,"o":29294.25,"h":29315.0,"l":29243.25,"c":29288.25},{"t":"10:00","m":600,"o":29287.5,"h":29340.0,"l":29283.25,"c":29306.5},{"t":"10:05","m":605,"o":29306.0,"h":29322.0,"l":29270.75,"c":29321.0},{"t":"10:10","m":610,"o":29320.75,"h":29323.75,"l":29251.25,"c":29267.0},{"t":"10:15","m":615,"o":29267.0,"h":29276.75,"l":29187.5,"c":29189.5},{"t":"10:20","m":620,"o":29189.0,"h":29193.25,"l":29127.0,"c":29158.0},{"t":"10:25","m":625,"o":29159.0,"h":29197.5,"l":29141.75,"c":29190.0},{"t":"10:30","m":630,"o":29189.25,"h":29237.0,"l":29175.75,"c":29196.5},{"t":"10:35","m":635,"o":29196.25,"h":29255.75,"l":29194.0,"c":29241.0},{"t":"10:40","m":640,"o":29239.75,"h":29246.25,"l":29197.5,"c":29236.0},{"t":"10:45","m":645,"o":29234.5,"h":29245.75,"l":29171.75,"c":29199.0},{"t":"10:50","m":650,"o":29199.0,"h":29227.75,"l":29166.0,"c":29222.25},{"t":"10:55","m":655,"o":29222.25,"h":29253.5,"l":29207.5,"c":29235.75},{"t":"11:00","m":660,"o":29235.5,"h":29244.75,"l":29200.0,"c":29212.75},{"t":"11:05","m":665,"o":29212.5,"h":29216.0,"l":29142.0,"c":29166.75},{"t":"11:10","m":670,"o":29166.75,"h":29249.25,"l":29139.0,"c":29233.0},{"t":"11:15","m":675,"o":29233.0,"h":29248.25,"l":29219.5,"c":29244.0},{"t":"11:20","m":680,"o":29243.5,"h":29263.5,"l":29225.75,"c":29239.5},{"t":"11:25","m":685,"o":29238.25,"h":29255.75,"l":29227.5,"c":29234.75},{"t":"11:30","m":690,"o":29234.5,"h":29243.25,"l":29175.5,"c":29185.5},{"t":"11:35","m":695,"o":29185.5,"h":29256.25,"l":29176.25,"c":29253.75},{"t":"11:40","m":700,"o":29254.75,"h":29274.75,"l":29243.5,"c":29258.0},{"t":"11:45","m":705,"o":29257.5,"h":29298.25,"l":29257.0,"c":29295.5},{"t":"11:50","m":710,"o":29295.25,"h":29304.5,"l":29277.5,"c":29286.25},{"t":"11:55","m":715,"o":29287.0,"h":29291.75,"l":29262.25,"c":29266.25},{"t":"12:00","m":720,"o":29267.0,"h":29298.5,"l":29265.25,"c":29290.75},{"t":"12:05","m":725,"o":29290.0,"h":29310.5,"l":29268.0,"c":29308.75},{"t":"12:10","m":730,"o":29308.75,"h":29309.75,"l":29263.0,"c":29275.25},{"t":"12:15","m":735,"o":29274.75,"h":29282.5,"l":29253.25,"c":29263.0},{"t":"12:20","m":740,"o":29263.75,"h":29274.0,"l":29215.25,"c":29243.25},{"t":"12:25","m":745,"o":29243.75,"h":29252.0,"l":29229.25,"c":29247.75},{"t":"12:30","m":750,"o":29247.25,"h":29268.0,"l":29240.0,"c":29262.5},{"t":"12:35","m":755,"o":29263.25,"h":29273.75,"l":29232.0,"c":29252.25},{"t":"12:40","m":760,"o":29252.5,"h":29263.25,"l":29239.0,"c":29254.5},{"t":"12:45","m":765,"o":29256.25,"h":29270.0,"l":29220.25,"c":29232.5},{"t":"12:50","m":770,"o":29231.75,"h":29249.25,"l":29207.75,"c":29239.25},{"t":"12:55","m":775,"o":29239.25,"h":29258.75,"l":29236.5,"c":29257.75},{"t":"13:00","m":780,"o":29258.75,"h":29292.5,"l":29258.25,"c":29275.5},{"t":"13:05","m":785,"o":29276.5,"h":29291.75,"l":29274.75,"c":29283.5},{"t":"13:10","m":790,"o":29283.75,"h":29382.0,"l":29283.25,"c":29343.25},{"t":"13:15","m":795,"o":29344.5,"h":29437.75,"l":29335.25,"c":29412.0},{"t":"13:20","m":800,"o":29411.25,"h":29478.25,"l":29365.5,"c":29415.75},{"t":"13:25","m":805,"o":29414.25,"h":29432.75,"l":29401.75,"c":29412.75},{"t":"13:30","m":810,"o":29412.5,"h":29451.25,"l":29407.25,"c":29436.25},{"t":"13:35","m":815,"o":29437.25,"h":29463.5,"l":29434.0,"c":29459.75},{"t":"13:40","m":820,"o":29459.75,"h":29496.25,"l":29459.5,"c":29493.0},{"t":"13:45","m":825,"o":29493.75,"h":29504.25,"l":29470.0,"c":29500.5},{"t":"13:50","m":830,"o":29501.25,"h":29545.0,"l":29485.0,"c":29541.25},{"t":"13:55","m":835,"o":29542.25,"h":29554.0,"l":29495.0,"c":29497.25},{"t":"14:00","m":840,"o":29497.0,"h":29521.5,"l":29461.0,"c":29467.25},{"t":"14:05","m":845,"o":29468.0,"h":29498.75,"l":29459.5,"c":29484.75},{"t":"14:10","m":850,"o":29485.25,"h":29489.75,"l":29445.0,"c":29450.75},{"t":"14:15","m":855,"o":29451.75,"h":29467.5,"l":29428.0,"c":29466.25},{"t":"14:20","m":860,"o":29466.5,"h":29478.0,"l":29445.5,"c":29473.0},{"t":"14:25","m":865,"o":29472.5,"h":29476.75,"l":29452.0,"c":29459.0},{"t":"14:30","m":870,"o":29459.75,"h":29468.75,"l":29442.75,"c":29454.5},{"t":"14:35","m":875,"o":29454.25,"h":29459.75,"l":29435.0,"c":29442.75},{"t":"14:40","m":880,"o":29442.75,"h":29469.5,"l":29440.75,"c":29457.5},{"t":"14:45","m":885,"o":29456.25,"h":29465.75,"l":29384.75,"c":29406.0},{"t":"14:50","m":890,"o":29406.25,"h":29431.25,"l":29306.5,"c":29309.25},{"t":"14:55","m":895,"o":29308.5,"h":29337.5,"l":29293.25,"c":29337.0},{"t":"15:00","m":900,"o":29338.5,"h":29379.5,"l":29335.25,"c":29375.25},{"t":"15:05","m":905,"o":29375.25,"h":29402.5,"l":29344.5,"c":29398.5},{"t":"15:10","m":910,"o":29397.5,"h":29413.0,"l":29380.0,"c":29412.25},{"t":"15:15","m":915,"o":29411.75,"h":29429.75,"l":29405.0,"c":29429.25},{"t":"15:20","m":920,"o":29429.0,"h":29434.5,"l":29405.25,"c":29424.25},{"t":"15:25","m":925,"o":29425.0,"h":29439.25,"l":29413.0,"c":29427.5},{"t":"15:30","m":930,"o":29428.0,"h":29437.25,"l":29407.25,"c":29409.0},{"t":"15:35","m":935,"o":29409.0,"h":29435.0,"l":29408.25,"c":29430.75},{"t":"15:40","m":940,"o":29430.5,"h":29444.5,"l":29403.0,"c":29416.5},{"t":"15:45","m":945,"o":29416.75,"h":29432.75,"l":29405.0,"c":29426.75},{"t":"15:50","m":950,"o":29427.0,"h":29449.5,"l":29401.5,"c":29416.5},{"t":"15:55","m":955,"o":29417.25,"h":29466.0,"l":29399.0,"c":29446.25},{"t":"16:00","m":960,"o":29446.25,"h":29467.75,"l":29433.75,"c":29459.0},{"t":"16:05","m":965,"o":29458.5,"h":29471.0,"l":29449.0,"c":29465.0},{"t":"16:10","m":970,"o":29464.25,"h":29464.25,"l":29450.5,"c":29458.0},{"t":"16:15","m":975,"o":29457.25,"h":29460.75,"l":29445.25,"c":29449.75},{"t":"16:20","m":980,"o":29450.25,"h":29450.75,"l":29439.25,"c":29446.5},{"t":"16:25","m":985,"o":29447.0,"h":29453.75,"l":29441.25,"c":29447.0},{"t":"16:30","m":990,"o":29447.75,"h":29456.5,"l":29445.0,"c":29454.75},{"t":"16:35","m":995,"o":29454.25,"h":29460.25,"l":29453.5,"c":29457.75},{"t":"16:40","m":1000,"o":29457.25,"h":29458.75,"l":29452.5,"c":29458.25},{"t":"16:45","m":1005,"o":29458.25,"h":29464.25,"l":29456.5,"c":29459.5},{"t":"16:50","m":1010,"o":29459.5,"h":29463.75,"l":29455.25,"c":29458.0},{"t":"16:55","m":1015,"o":29458.75,"h":29460.5,"l":29451.25,"c":29455.5}],"range_high":29381.5,"range_low":29171.0,"acc_start":"20:00","acc_end":"23:55","sweep_ts":"10:25","sweep_confirmed":"10:30","sweep_extreme":29141.75,"swept_level":29171.0,"penetration":29.25,"direction":1,"confirmation_ts":"11:50","confirmation_structure":"choch","fvg_top":29219.5,"fvg_bottom":29216.0,"entry":29217.75,"stop":29137.0,"target":29381.5,"protective_extreme":29139.0,"valid_from":"11:50","entry_ts":"12:23","exit_ts":"13:11","exit_price":29381.5,"exit_reason":"target","r_multiple":2.028,"net_pnl":970.5,"contracts":3,"risk_points":80.75},"loss":{"date":"2025-06-30","bars":[{"t":"18:00","m":1080,"o":22751.5,"h":22788.75,"l":22751.5,"c":22775.0},{"t":"18:05","m":1085,"o":22775.25,"h":22791.0,"l":22757.5,"c":22780.0},{"t":"18:10","m":1090,"o":22778.0,"h":22781.0,"l":22769.5,"c":22776.5},{"t":"18:15","m":1095,"o":22776.25,"h":22784.0,"l":22775.0,"c":22780.75},{"t":"18:20","m":1100,"o":22781.5,"h":22793.0,"l":22780.75,"c":22790.5},{"t":"18:25","m":1105,"o":22791.25,"h":22809.5,"l":22789.0,"c":22808.0},{"t":"18:30","m":1110,"o":22809.25,"h":22812.75,"l":22803.5,"c":22808.75},{"t":"18:35","m":1115,"o":22808.0,"h":22816.0,"l":22807.75,"c":22810.25},{"t":"18:40","m":1120,"o":22810.25,"h":22815.25,"l":22805.5,"c":22808.25},{"t":"18:45","m":1125,"o":22808.0,"h":22813.75,"l":22802.5,"c":22813.75},{"t":"18:50","m":1130,"o":22813.25,"h":22828.0,"l":22812.0,"c":22822.0},{"t":"18:55","m":1135,"o":22821.5,"h":22842.5,"l":22818.5,"c":22819.5},{"t":"19:00","m":1140,"o":22818.75,"h":22834.0,"l":22817.0,"c":22833.5},{"t":"19:05","m":1145,"o":22834.0,"h":22841.5,"l":22830.0,"c":22834.75},{"t":"19:10","m":1150,"o":22835.5,"h":22847.0,"l":22835.0,"c":22840.0},{"t":"19:15","m":1155,"o":22839.5,"h":22846.0,"l":22839.25,"c":22840.5},{"t":"19:20","m":1160,"o":22839.75,"h":22839.75,"l":22830.75,"c":22835.0},{"t":"19:25","m":1165,"o":22835.75,"h":22839.75,"l":22830.25,"c":22833.75},{"t":"19:30","m":1170,"o":22834.0,"h":22834.75,"l":22827.75,"c":22828.5},{"t":"19:35","m":1175,"o":22828.0,"h":22830.0,"l":22812.0,"c":22813.5},{"t":"19:40","m":1180,"o":22814.0,"h":22820.0,"l":22811.0,"c":22811.75},{"t":"19:45","m":1185,"o":22811.75,"h":22825.0,"l":22808.25,"c":22822.5},{"t":"19:50","m":1190,"o":22821.5,"h":22825.25,"l":22811.25,"c":22822.75},{"t":"19:55","m":1195,"o":22822.0,"h":22824.75,"l":22812.5,"c":22817.75},{"t":"20:00","m":1200,"o":22817.25,"h":22818.25,"l":22808.0,"c":22812.75},{"t":"20:05","m":1205,"o":22812.5,"h":22822.0,"l":22804.5,"c":22820.5},{"t":"20:10","m":1210,"o":22820.0,"h":22825.75,"l":22814.25,"c":22823.25},{"t":"20:15","m":1215,"o":22825.0,"h":22826.25,"l":22818.0,"c":22823.5},{"t":"20:20","m":1220,"o":22824.0,"h":22826.25,"l":22818.5,"c":22821.25},{"t":"20:25","m":1225,"o":22820.5,"h":22832.25,"l":22818.75,"c":22828.5},{"t":"20:30","m":1230,"o":22828.25,"h":22840.5,"l":22826.75,"c":22838.0},{"t":"20:35","m":1235,"o":22838.0,"h":22842.5,"l":22833.25,"c":22838.75},{"t":"20:40","m":1240,"o":22839.5,"h":22842.0,"l":22836.0,"c":22837.25},{"t":"20:45","m":1245,"o":22837.75,"h":22839.75,"l":22832.75,"c":22835.75},{"t":"20:50","m":1250,"o":22834.75,"h":22836.0,"l":22831.5,"c":22834.5},{"t":"20:55","m":1255,"o":22833.5,"h":22837.5,"l":22833.0,"c":22834.0},{"t":"21:00","m":1260,"o":22833.0,"h":22833.75,"l":22821.5,"c":22825.5},{"t":"21:05","m":1265,"o":22825.25,"h":22829.75,"l":22820.0,"c":22826.75},{"t":"21:10","m":1270,"o":22826.5,"h":22826.5,"l":22817.25,"c":22821.0},{"t":"21:15","m":1275,"o":22820.75,"h":22821.75,"l":22816.75,"c":22820.25},{"t":"21:20","m":1280,"o":22821.0,"h":22825.0,"l":22817.25,"c":22820.75},{"t":"21:25","m":1285,"o":22821.5,"h":22825.5,"l":22819.5,"c":22825.0},{"t":"21:30","m":1290,"o":22824.25,"h":22835.25,"l":22824.25,"c":22831.0},{"t":"21:35","m":1295,"o":22831.0,"h":22836.25,"l":22829.75,"c":22831.0},{"t":"21:40","m":1300,"o":22830.25,"h":22832.25,"l":22827.0,"c":22831.0},{"t":"21:45","m":1305,"o":22831.0,"h":22834.0,"l":22824.5,"c":22827.25},{"t":"21:50","m":1310,"o":22827.25,"h":22828.5,"l":22821.25,"c":22822.5},{"t":"21:55","m":1315,"o":22822.5,"h":22823.5,"l":22812.75,"c":22822.0},{"t":"22:00","m":1320,"o":22822.5,"h":22829.75,"l":22818.75,"c":22827.0},{"t":"22:05","m":1325,"o":22826.5,"h":22840.5,"l":22822.0,"c":22839.0},{"t":"22:10","m":1330,"o":22838.5,"h":22848.75,"l":22835.25,"c":22844.25},{"t":"22:15","m":1335,"o":22844.75,"h":22847.0,"l":22839.5,"c":22844.0},{"t":"22:20","m":1340,"o":22845.0,"h":22845.75,"l":22840.25,"c":22841.0},{"t":"22:25","m":1345,"o":22841.0,"h":22842.0,"l":22831.75,"c":22835.25},{"t":"22:30","m":1350,"o":22834.25,"h":22845.0,"l":22833.25,"c":22843.25},{"t":"22:35","m":1355,"o":22843.0,"h":22856.75,"l":22842.75,"c":22855.75},{"t":"22:40","m":1360,"o":22855.75,"h":22863.5,"l":22852.25,"c":22861.0},{"t":"22:45","m":1365,"o":22862.0,"h":22866.5,"l":22860.0,"c":22863.5},{"t":"22:50","m":1370,"o":22862.75,"h":22873.25,"l":22857.5,"c":22859.5},{"t":"22:55","m":1375,"o":22859.25,"h":22861.75,"l":22852.5,"c":22861.75},{"t":"23:00","m":1380,"o":22861.75,"h":22869.0,"l":22859.75,"c":22865.25},{"t":"23:05","m":1385,"o":22864.75,"h":22865.0,"l":22859.75,"c":22864.0},{"t":"23:10","m":1390,"o":22863.25,"h":22865.75,"l":22860.5,"c":22862.5},{"t":"23:15","m":1395,"o":22862.0,"h":22871.5,"l":22857.0,"c":22868.25},{"t":"23:20","m":1400,"o":22868.5,"h":22873.0,"l":22867.5,"c":22871.25},{"t":"23:25","m":1405,"o":22871.25,"h":22871.5,"l":22865.75,"c":22866.75},{"t":"23:30","m":1410,"o":22867.0,"h":22870.75,"l":22866.5,"c":22869.75},{"t":"23:35","m":1415,"o":22870.0,"h":22876.0,"l":22869.5,"c":22872.75},{"t":"23:40","m":1420,"o":22872.75,"h":22877.5,"l":22872.25,"c":22877.0},{"t":"23:45","m":1425,"o":22877.0,"h":22879.0,"l":22875.0,"c":22875.5},{"t":"23:50","m":1430,"o":22876.75,"h":22880.5,"l":22876.25,"c":22878.5},{"t":"23:55","m":1435,"o":22878.75,"h":22878.75,"l":22872.25,"c":22873.25},{"t":"00:00","m":0,"o":22873.0,"h":22878.25,"l":22872.25,"c":22876.5},{"t":"00:05","m":5,"o":22876.25,"h":22879.0,"l":22875.0,"c":22877.75},{"t":"00:10","m":10,"o":22878.25,"h":22882.0,"l":22873.75,"c":22876.75},{"t":"00:15","m":15,"o":22876.75,"h":22877.25,"l":22873.0,"c":22875.75},{"t":"00:20","m":20,"o":22876.25,"h":22878.0,"l":22874.25,"c":22876.25},{"t":"00:25","m":25,"o":22876.0,"h":22877.75,"l":22875.25,"c":22876.75},{"t":"00:30","m":30,"o":22877.5,"h":22879.25,"l":22876.75,"c":22877.75},{"t":"00:35","m":35,"o":22877.5,"h":22885.0,"l":22877.25,"c":22883.75},{"t":"00:40","m":40,"o":22884.0,"h":22885.25,"l":22881.75,"c":22882.75},{"t":"00:45","m":45,"o":22882.75,"h":22883.75,"l":22880.25,"c":22880.5},{"t":"00:50","m":50,"o":22881.0,"h":22882.5,"l":22873.5,"c":22874.5},{"t":"00:55","m":55,"o":22875.0,"h":22875.75,"l":22871.0,"c":22874.25},{"t":"01:00","m":60,"o":22874.0,"h":22874.25,"l":22868.0,"c":22872.75},{"t":"01:05","m":65,"o":22872.75,"h":22876.0,"l":22871.0,"c":22874.75},{"t":"01:10","m":70,"o":22874.75,"h":22878.5,"l":22874.0,"c":22876.5},{"t":"01:15","m":75,"o":22876.0,"h":22877.75,"l":22873.0,"c":22874.0},{"t":"01:20","m":80,"o":22874.5,"h":22875.0,"l":22868.0,"c":22869.5},{"t":"01:25","m":85,"o":22870.0,"h":22871.0,"l":22865.25,"c":22868.0},{"t":"01:30","m":90,"o":22867.5,"h":22868.25,"l":22862.0,"c":22867.25},{"t":"01:35","m":95,"o":22866.75,"h":22881.75,"l":22866.25,"c":22876.5},{"t":"01:40","m":100,"o":22877.25,"h":22880.5,"l":22875.75,"c":22879.75},{"t":"01:45","m":105,"o":22880.0,"h":22883.75,"l":22877.75,"c":22882.5},{"t":"01:50","m":110,"o":22881.75,"h":22882.75,"l":22874.0,"c":22875.75},{"t":"01:55","m":115,"o":22876.0,"h":22878.0,"l":22875.5,"c":22876.0},{"t":"02:00","m":120,"o":22876.5,"h":22880.25,"l":22874.25,"c":22878.5},{"t":"02:05","m":125,"o":22878.25,"h":22886.5,"l":22877.75,"c":22883.75},{"t":"02:10","m":130,"o":22883.75,"h":22894.25,"l":22882.25,"c":22892.25},{"t":"02:15","m":135,"o":22892.75,"h":22898.75,"l":22892.25,"c":22895.0},{"t":"02:20","m":140,"o":22895.0,"h":22901.5,"l":22893.5,"c":22900.75},{"t":"02:25","m":145,"o":22901.25,"h":22901.25,"l":22891.75,"c":22894.25},{"t":"02:30","m":150,"o":22893.25,"h":22898.25,"l":22889.5,"c":22892.5},{"t":"02:35","m":155,"o":22893.0,"h":22893.25,"l":22884.5,"c":22887.0},{"t":"02:40","m":160,"o":22888.0,"h":22888.25,"l":22878.0,"c":22879.0},{"t":"02:45","m":165,"o":22879.75,"h":22883.5,"l":22879.5,"c":22881.75},{"t":"02:50","m":170,"o":22882.0,"h":22885.5,"l":22879.5,"c":22879.5},{"t":"02:55","m":175,"o":22879.25,"h":22882.5,"l":22875.0,"c":22881.75},{"t":"03:00","m":180,"o":22882.5,"h":22882.75,"l":22859.5,"c":22868.75},{"t":"03:05","m":185,"o":22868.0,"h":22868.25,"l":22854.0,"c":22859.75},{"t":"03:10","m":190,"o":22860.25,"h":22860.5,"l":22854.25,"c":22855.75},{"t":"03:15","m":195,"o":22856.5,"h":22861.0,"l":22849.25,"c":22859.5},{"t":"03:20","m":200,"o":22860.25,"h":22874.0,"l":22857.0,"c":22863.75},{"t":"03:25","m":205,"o":22863.0,"h":22863.75,"l":22854.0,"c":22861.25},{"t":"03:30","m":210,"o":22862.25,"h":22869.0,"l":22855.0,"c":22863.25},{"t":"03:35","m":215,"o":22863.75,"h":22869.25,"l":22861.0,"c":22861.5},{"t":"03:40","m":220,"o":22861.75,"h":22871.75,"l":22861.5,"c":22871.5},{"t":"03:45","m":225,"o":22871.75,"h":22879.0,"l":22870.5,"c":22874.25},{"t":"03:50","m":230,"o":22874.0,"h":22875.5,"l":22868.25,"c":22872.25},{"t":"03:55","m":235,"o":22873.0,"h":22874.75,"l":22866.5,"c":22868.5},{"t":"04:00","m":240,"o":22869.5,"h":22878.5,"l":22857.0,"c":22877.0},{"t":"04:05","m":245,"o":22877.5,"h":22881.5,"l":22872.75,"c":22877.75},{"t":"04:10","m":250,"o":22877.75,"h":22888.25,"l":22877.75,"c":22887.0},{"t":"04:15","m":255,"o":22886.75,"h":22893.75,"l":22877.75,"c":22880.0},{"t":"04:20","m":260,"o":22879.0,"h":22881.25,"l":22865.5,"c":22868.75},{"t":"04:25","m":265,"o":22869.0,"h":22874.75,"l":22867.5,"c":22870.25},{"t":"04:30","m":270,"o":22869.75,"h":22871.0,"l":22858.25,"c":22862.0},{"t":"04:35","m":275,"o":22862.0,"h":22867.75,"l":22862.0,"c":22865.25},{"t":"04:40","m":280,"o":22865.25,"h":22869.75,"l":22860.25,"c":22865.5},{"t":"04:45","m":285,"o":22866.5,"h":22873.25,"l":22866.5,"c":22871.75},{"t":"04:50","m":290,"o":22872.0,"h":22879.5,"l":22872.0,"c":22876.75},{"t":"04:55","m":295,"o":22876.75,"h":22877.25,"l":22872.0,"c":22873.75},{"t":"05:00","m":300,"o":22874.25,"h":22877.25,"l":22867.5,"c":22872.0},{"t":"05:05","m":305,"o":22872.75,"h":22882.25,"l":22872.75,"c":22879.75},{"t":"05:10","m":310,"o":22880.5,"h":22885.25,"l":22878.5,"c":22885.0},{"t":"05:15","m":315,"o":22885.25,"h":22892.25,"l":22884.0,"c":22888.5},{"t":"05:20","m":320,"o":22888.5,"h":22892.5,"l":22886.25,"c":22890.5},{"t":"05:25","m":325,"o":22891.0,"h":22903.75,"l":22890.0,"c":22903.5},{"t":"05:30","m":330,"o":22903.5,"h":22911.75,"l":22902.5,"c":22906.5},{"t":"05:35","m":335,"o":22907.0,"h":22915.0,"l":22906.75,"c":22913.5},{"t":"05:40","m":340,"o":22913.75,"h":22913.75,"l":22901.5,"c":22902.25},{"t":"05:45","m":345,"o":22902.0,"h":22902.25,"l":22887.75,"c":22888.75},{"t":"05:50","m":350,"o":22888.5,"h":22888.5,"l":22880.5,"c":22887.25},{"t":"05:55","m":355,"o":22886.5,"h":22887.25,"l":22880.0,"c":22881.5},{"t":"06:00","m":360,"o":22881.25,"h":22885.25,"l":22879.25,"c":22883.5},{"t":"06:05","m":365,"o":22883.5,"h":22896.5,"l":22883.25,"c":22892.0},{"t":"06:10","m":370,"o":22891.5,"h":22902.5,"l":22891.5,"c":22901.75},{"t":"06:15","m":375,"o":22901.5,"h":22904.5,"l":22899.25,"c":22903.75},{"t":"06:20","m":380,"o":22904.25,"h":22906.25,"l":22901.75,"c":22902.75},{"t":"06:25","m":385,"o":22903.0,"h":22906.0,"l":22902.75,"c":22903.5},{"t":"06:30","m":390,"o":22904.25,"h":22908.75,"l":22898.75,"c":22901.0},{"t":"06:35","m":395,"o":22900.5,"h":22905.75,"l":22898.5,"c":22903.75},{"t":"06:40","m":400,"o":22904.75,"h":22906.0,"l":22900.25,"c":22900.75},{"t":"06:45","m":405,"o":22900.75,"h":22902.5,"l":22893.75,"c":22896.0},{"t":"06:50","m":410,"o":22896.75,"h":22897.75,"l":22891.0,"c":22894.0},{"t":"06:55","m":415,"o":22894.0,"h":22896.0,"l":22889.25,"c":22890.5},{"t":"07:00","m":420,"o":22890.5,"h":22895.25,"l":22882.5,"c":22884.0},{"t":"07:05","m":425,"o":22883.5,"h":22893.75,"l":22881.75,"c":22892.0},{"t":"07:10","m":430,"o":22892.5,"h":22895.0,"l":22888.0,"c":22893.5},{"t":"07:15","m":435,"o":22893.25,"h":22900.5,"l":22889.25,"c":22899.5},{"t":"07:20","m":440,"o":22899.25,"h":22903.25,"l":22895.0,"c":22901.0},{"t":"07:25","m":445,"o":22901.25,"h":22902.25,"l":22896.75,"c":22899.5},{"t":"07:30","m":450,"o":22899.0,"h":22899.5,"l":22892.25,"c":22894.0},{"t":"07:35","m":455,"o":22894.25,"h":22894.25,"l":22881.0,"c":22885.25},{"t":"07:40","m":460,"o":22885.75,"h":22898.25,"l":22884.5,"c":22897.5},{"t":"07:45","m":465,"o":22898.0,"h":22905.75,"l":22897.5,"c":22903.75},{"t":"07:50","m":470,"o":22904.0,"h":22905.0,"l":22894.25,"c":22896.75},{"t":"07:55","m":475,"o":22897.0,"h":22897.5,"l":22890.0,"c":22894.5},{"t":"08:00","m":480,"o":22893.75,"h":22895.75,"l":22886.25,"c":22887.0},{"t":"08:05","m":485,"o":22887.25,"h":22893.5,"l":22887.25,"c":22892.75},{"t":"08:10","m":490,"o":22892.5,"h":22897.0,"l":22889.0,"c":22895.75},{"t":"08:15","m":495,"o":22895.75,"h":22897.25,"l":22887.5,"c":22894.0},{"t":"08:20","m":500,"o":22894.0,"h":22896.5,"l":22882.25,"c":22886.25},{"t":"08:25","m":505,"o":22886.5,"h":22887.75,"l":22881.25,"c":22887.0},{"t":"08:30","m":510,"o":22886.0,"h":22886.5,"l":22871.0,"c":22875.0},{"t":"08:35","m":515,"o":22874.25,"h":22877.0,"l":22865.0,"c":22866.25},{"t":"08:40","m":520,"o":22866.25,"h":22867.25,"l":22862.75,"c":22865.75},{"t":"08:45","m":525,"o":22865.75,"h":22867.75,"l":22858.75,"c":22859.25},{"t":"08:50","m":530,"o":22859.5,"h":22871.75,"l":22853.75,"c":22864.0},{"t":"08:55","m":535,"o":22864.25,"h":22870.25,"l":22861.75,"c":22867.75},{"t":"09:00","m":540,"o":22868.0,"h":22878.25,"l":22866.5,"c":22876.0},{"t":"09:05","m":545,"o":22876.5,"h":22879.75,"l":22869.75,"c":22875.0},{"t":"09:10","m":550,"o":22875.5,"h":22883.0,"l":22871.25,"c":22878.75},{"t":"09:15","m":555,"o":22878.75,"h":22887.75,"l":22875.0,"c":22887.5},{"t":"09:20","m":560,"o":22887.75,"h":22889.5,"l":22882.0,"c":22882.25},{"t":"09:25","m":565,"o":22882.5,"h":22885.75,"l":22868.75,"c":22871.75},{"t":"09:30","m":570,"o":22871.75,"h":22875.5,"l":22816.75,"c":22825.25},{"t":"09:35","m":575,"o":22825.25,"h":22847.0,"l":22808.75,"c":22832.5},{"t":"09:40","m":580,"o":22833.0,"h":22839.75,"l":22804.75,"c":22814.5},{"t":"09:45","m":585,"o":22814.75,"h":22829.5,"l":22795.5,"c":22800.0},{"t":"09:50","m":590,"o":22800.25,"h":22821.75,"l":22794.25,"c":22807.75},{"t":"09:55","m":595,"o":22807.5,"h":22831.25,"l":22806.75,"c":22826.5},{"t":"10:00","m":600,"o":22826.75,"h":22839.75,"l":22821.5,"c":22832.75},{"t":"10:05","m":605,"o":22832.5,"h":22840.0,"l":22817.25,"c":22830.0},{"t":"10:10","m":610,"o":22829.75,"h":22853.75,"l":22827.75,"c":22844.0},{"t":"10:15","m":615,"o":22843.75,"h":22845.25,"l":22818.0,"c":22836.25},{"t":"10:20","m":620,"o":22835.5,"h":22838.5,"l":22807.5,"c":22823.0},{"t":"10:25","m":625,"o":22822.75,"h":22842.5,"l":22813.0,"c":22841.75},{"t":"10:30","m":630,"o":22842.0,"h":22845.0,"l":22826.0,"c":22826.5},{"t":"10:35","m":635,"o":22826.25,"h":22828.25,"l":22809.0,"c":22817.5},{"t":"10:40","m":640,"o":22818.0,"h":22839.75,"l":22809.25,"c":22820.75},{"t":"10:45","m":645,"o":22820.25,"h":22836.0,"l":22811.0,"c":22831.25},{"t":"10:50","m":650,"o":22831.25,"h":22832.75,"l":22815.25,"c":22822.25},{"t":"10:55","m":655,"o":22822.0,"h":22829.0,"l":22817.75,"c":22821.25},{"t":"11:00","m":660,"o":22821.75,"h":22833.0,"l":22815.5,"c":22830.0},{"t":"11:05","m":665,"o":22829.5,"h":22842.0,"l":22828.75,"c":22839.75},{"t":"11:10","m":670,"o":22840.25,"h":22841.5,"l":22808.5,"c":22815.25},{"t":"11:15","m":675,"o":22815.0,"h":22816.0,"l":22801.5,"c":22807.75},{"t":"11:20","m":680,"o":22807.75,"h":22822.75,"l":22803.5,"c":22821.5},{"t":"11:25","m":685,"o":22821.0,"h":22827.5,"l":22812.25,"c":22817.0},{"t":"11:30","m":690,"o":22817.5,"h":22840.25,"l":22809.25,"c":22836.75},{"t":"11:35","m":695,"o":22837.0,"h":22840.0,"l":22829.5,"c":22839.75},{"t":"11:40","m":700,"o":22839.5,"h":22850.0,"l":22831.0,"c":22844.5},{"t":"11:45","m":705,"o":22845.25,"h":22856.75,"l":22842.0,"c":22850.75},{"t":"11:50","m":710,"o":22851.25,"h":22858.5,"l":22847.25,"c":22849.0},{"t":"11:55","m":715,"o":22848.75,"h":22851.75,"l":22836.25,"c":22843.25},{"t":"12:00","m":720,"o":22843.25,"h":22863.0,"l":22841.75,"c":22861.5},{"t":"12:05","m":725,"o":22862.0,"h":22866.75,"l":22857.75,"c":22865.75},{"t":"12:10","m":730,"o":22866.0,"h":22867.5,"l":22853.25,"c":22853.25},{"t":"12:15","m":735,"o":22853.5,"h":22864.5,"l":22832.0,"c":22840.75},{"t":"12:20","m":740,"o":22840.25,"h":22845.25,"l":22833.0,"c":22836.0},{"t":"12:25","m":745,"o":22835.75,"h":22843.25,"l":22832.5,"c":22836.0},{"t":"12:30","m":750,"o":22835.75,"h":22849.0,"l":22833.0,"c":22848.5},{"t":"12:35","m":755,"o":22848.25,"h":22855.0,"l":22845.25,"c":22849.75},{"t":"12:40","m":760,"o":22849.25,"h":22866.5,"l":22849.25,"c":22855.25},{"t":"12:45","m":765,"o":22855.5,"h":22864.75,"l":22854.0,"c":22859.0},{"t":"12:50","m":770,"o":22859.0,"h":22862.0,"l":22853.25,"c":22857.75},{"t":"12:55","m":775,"o":22858.0,"h":22861.5,"l":22838.25,"c":22842.25},{"t":"13:00","m":780,"o":22842.25,"h":22849.5,"l":22833.5,"c":22836.75},{"t":"13:05","m":785,"o":22836.75,"h":22841.25,"l":22826.75,"c":22839.75},{"t":"13:10","m":790,"o":22839.0,"h":22845.75,"l":22831.25,"c":22832.75},{"t":"13:15","m":795,"o":22832.5,"h":22837.0,"l":22826.0,"c":22829.5},{"t":"13:20","m":800,"o":22829.25,"h":22833.75,"l":22823.5,"c":22831.5},{"t":"13:25","m":805,"o":22831.75,"h":22839.0,"l":22824.5,"c":22837.0},{"t":"13:30","m":810,"o":22837.25,"h":22839.75,"l":22818.75,"c":22822.5},{"t":"13:35","m":815,"o":22822.25,"h":22829.25,"l":22815.0,"c":22823.0},{"t":"13:40","m":820,"o":22823.0,"h":22828.5,"l":22814.5,"c":22816.75},{"t":"13:45","m":825,"o":22816.75,"h":22828.25,"l":22816.0,"c":22825.0},{"t":"13:50","m":830,"o":22824.75,"h":22834.75,"l":22822.5,"c":22827.5},{"t":"13:55","m":835,"o":22827.5,"h":22848.25,"l":22786.25,"c":22821.0},{"t":"14:00","m":840,"o":22821.0,"h":22837.25,"l":22819.0,"c":22825.75},{"t":"14:05","m":845,"o":22825.75,"h":22838.5,"l":22814.25,"c":22818.0},{"t":"14:10","m":850,"o":22818.0,"h":22823.5,"l":22806.5,"c":22818.25},{"t":"14:15","m":855,"o":22817.75,"h":22835.25,"l":22816.5,"c":22829.5},{"t":"14:20","m":860,"o":22829.25,"h":22841.25,"l":22826.25,"c":22831.25},{"t":"14:25","m":865,"o":22831.25,"h":22833.0,"l":22817.25,"c":22819.75},{"t":"14:30","m":870,"o":22819.25,"h":22823.0,"l":22798.5,"c":22803.25},{"t":"14:35","m":875,"o":22802.75,"h":22808.75,"l":22796.25,"c":22802.5},{"t":"14:40","m":880,"o":22802.25,"h":22803.0,"l":22781.0,"c":22797.5},{"t":"14:45","m":885,"o":22797.75,"h":22819.5,"l":22797.25,"c":22803.25},{"t":"14:50","m":890,"o":22802.75,"h":22825.5,"l":22802.0,"c":22824.5},{"t":"14:55","m":895,"o":22824.5,"h":22853.25,"l":22824.25,"c":22849.5},{"t":"15:00","m":900,"o":22849.25,"h":22863.75,"l":22848.25,"c":22860.75},{"t":"15:05","m":905,"o":22860.5,"h":22869.75,"l":22852.25,"c":22858.0},{"t":"15:10","m":910,"o":22858.0,"h":22873.5,"l":22852.25,"c":22865.75},{"t":"15:15","m":915,"o":22866.0,"h":22866.5,"l":22850.25,"c":22858.0},{"t":"15:20","m":920,"o":22857.25,"h":22882.5,"l":22856.0,"c":22878.75},{"t":"15:25","m":925,"o":22878.5,"h":22893.75,"l":22874.75,"c":22877.25},{"t":"15:30","m":930,"o":22877.25,"h":22884.25,"l":22866.25,"c":22881.25},{"t":"15:35","m":935,"o":22881.0,"h":22884.5,"l":22863.75,"c":22873.75},{"t":"15:40","m":940,"o":22873.5,"h":22895.0,"l":22872.25,"c":22882.25},{"t":"15:45","m":945,"o":22882.5,"h":22900.75,"l":22876.75,"c":22897.25},{"t":"15:50","m":950,"o":22897.5,"h":22934.5,"l":22880.0,"c":22930.0},{"t":"15:55","m":955,"o":22930.25,"h":22934.75,"l":22882.0,"c":22885.5},{"t":"16:00","m":960,"o":22886.0,"h":22897.75,"l":22872.75,"c":22876.25},{"t":"16:05","m":965,"o":22876.75,"h":22884.25,"l":22870.0,"c":22873.75},{"t":"16:10","m":970,"o":22874.25,"h":22875.5,"l":22852.5,"c":22863.0},{"t":"16:15","m":975,"o":22863.0,"h":22874.75,"l":22860.25,"c":22869.75},{"t":"16:20","m":980,"o":22869.75,"h":22872.5,"l":22863.75,"c":22864.5},{"t":"16:25","m":985,"o":22864.75,"h":22873.5,"l":22861.5,"c":22871.0},{"t":"16:30","m":990,"o":22871.0,"h":22879.25,"l":22870.5,"c":22879.0},{"t":"16:35","m":995,"o":22879.0,"h":22880.75,"l":22874.25,"c":22880.25},{"t":"16:40","m":1000,"o":22880.5,"h":22882.25,"l":22873.75,"c":22877.75},{"t":"16:45","m":1005,"o":22878.25,"h":22881.0,"l":22870.75,"c":22874.25},{"t":"16:50","m":1010,"o":22874.25,"h":22878.5,"l":22871.25,"c":22872.5},{"t":"16:55","m":1015,"o":22872.5,"h":22874.75,"l":22866.0,"c":22866.75}],"range_high":22880.5,"range_low":22804.5,"acc_start":"20:00","acc_end":"23:55","sweep_ts":"09:50","sweep_confirmed":"09:55","sweep_extreme":22794.25,"swept_level":22804.5,"penetration":10.25,"direction":1,"confirmation_ts":"11:45","confirmation_structure":"choch","fvg_top":22829.5,"fvg_bottom":22827.5,"entry":22828.5,"stop":22792.25,"target":22880.5,"protective_extreme":22794.25,"valid_from":"11:45","entry_ts":"13:05","exit_ts":"13:57","exit_price":22792.0,"exit_reason":"stop","r_multiple":-1.007,"net_pnl":-462.0,"contracts":6,"risk_points":36.25},"funnel":[["\u4ea4\u6613\u65e5",690],["\u6709\u4e9e\u6d32\u5340\u9593",688],["\u5340\u9593 10\u2013400 \u9ede",680],["09:30\u201311:00 \u6383\u5230\u4e00\u908a",399],["\u8a72\u908a\u4e4b\u524d\u6c92\u88ab\u6383\u904e",118],["12:00 \u524d MSB \u78ba\u8a8d",51],["\u9650\u50f9\u55ae\u771f\u7684\u6210\u4ea4",35],["\u7372\u5229",16]],"rr":{"median":1.43,"below_1":16,"below_half":7,"total":51,"breakeven_wr":41,"actual_wr":46},"rr_values":[2.276,0.942,0.837,1.668,1.34,0.401,0.879,0.26,2.307,2.701,2.0,2.0,0.525,1.406,1.852,0.625,2.006,3.102,2.16,2.106,1.357,0.023,3.636,0.518,0.48,1.551,1.434,0.845,1.876,0.409,1.43,2.047,2.0,1.095,2.0,0.635,7.349,1.964,2.0,2.797,0.249,1.239,2.719,1.393,2.028,1.331,1.208,0.234,2.6,0.799,4.732]};</script>
+<script>
+const EX = window.__PO3__;
+const NS = "http://www.w3.org/2000/svg";
+const el = (t,a={}) => { const e=document.createElementNS(NS,t);
+  for (const k in a) e.setAttribute(k,a[k]); return e; };
+const fmt = n => n.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+
+/* ---------- annotated candlestick ---------- */
+function candles(hostId, ex, opts){
+  const {W, H, compact} = opts;
+  const m = {l: compact?52:66, r: compact?96:132, t:18, b:34};
+  const iw = W-m.l-m.r, ih = H-m.t-m.b;
+  const bars = ex.bars;
+  const idxOf = t => Math.max(0, bars.findIndex(b => b.t === t));
+
+  let lo = Math.min(...bars.map(b=>b.l), ex.stop, ex.target);
+  let hi = Math.max(...bars.map(b=>b.h), ex.stop, ex.target);
+  const pad = (hi-lo)*0.05; lo -= pad; hi += pad;
+  const X = i => m.l + (i+0.5)/bars.length*iw;
+  const Y = p => m.t + (hi-p)/(hi-lo)*ih;
+  const bw = Math.max(1.4, iw/bars.length*0.62);
+
+  const svg = el("svg",{viewBox:`0 0 ${W} ${H}`, width:W, role:"img",
+    "aria-label":`${ex.date} PO3 交易：亞洲區間、掃針、結構突破、FVG 進場、停損與停利`});
+
+  // price grid
+  const step = Math.pow(10, Math.floor(Math.log10((hi-lo)/5)));
+  const gs = [1,2,2.5,5,10].map(k=>k*step).find(s=>(hi-lo)/s<=6) || step*10;
+  for (let p = Math.ceil(lo/gs)*gs; p <= hi; p += gs){
+    svg.appendChild(el("line",{x1:m.l,x2:m.l+iw,y1:Y(p),y2:Y(p),
+      stroke:"var(--rule-2)","stroke-width":1}));
+    const t = el("text",{x:m.l-8,y:Y(p)+4,"text-anchor":"end",fill:"var(--ink-3)",
+      "font-size":10.5,"font-family":"var(--mono)"});
+    t.textContent = Math.round(p).toLocaleString("en-US"); svg.appendChild(t);
+  }
+
+  // Right-edge labels are collected and placed at the end: several levels can
+  // share a price (here the target IS the range high) and would overprint.
+  const rightLabels = [];
+  const addRight = (price, col, text, weight) =>
+    rightLabels.push({y:Y(price), col, text, weight: weight||400});
+
+  // Asian accumulation band
+  svg.appendChild(el("rect",{x:m.l, y:Y(ex.range_high),
+    width:iw, height:Math.max(1,Y(ex.range_low)-Y(ex.range_high)),
+    fill:"var(--acc)", opacity:.10}));
+  [["range_high","區間高"],["range_low","區間低"]].forEach(([k,lab]) => {
+    svg.appendChild(el("line",{x1:m.l,x2:m.l+iw,y1:Y(ex[k]),y2:Y(ex[k]),
+      stroke:"var(--acc)","stroke-width":1.4}));
+    addRight(ex[k], "var(--acc)", compact ? lab : `${lab} ${fmt(ex[k])}`);
+  });
+  // Asian session extent, shaded darker
+  const aS = idxOf(ex.acc_start), aE = idxOf(ex.acc_end);
+  svg.appendChild(el("rect",{x:X(aS)-bw/2, y:Y(ex.range_high),
+    width:Math.max(2,X(aE)-X(aS)+bw), height:Math.max(1,Y(ex.range_low)-Y(ex.range_high)),
+    fill:"var(--acc)", opacity:.14}));
+
+  // FVG entry zone. The gap is only a few points wide, so give the band a
+  // visible minimum height and an outline rather than letting it vanish.
+  const fvgY = Y(ex.fvg_top), fvgH = Y(ex.fvg_bottom) - fvgY;
+  const drawH = Math.max(5, fvgH), drawY = fvgY - (drawH - fvgH)/2;
+  svg.appendChild(el("rect",{x:m.l, y:drawY, width:iw, height:drawH,
+    fill:"var(--fvg)", opacity:.5, stroke:"var(--fvg)", "stroke-width":1}));
+
+  // candles
+  bars.forEach((b,i) => {
+    const up = b.c >= b.o, col = up ? "var(--up)" : "var(--down)";
+    svg.appendChild(el("line",{x1:X(i),x2:X(i),y1:Y(b.h),y2:Y(b.l),
+      stroke:col,"stroke-width":Math.max(.8,bw*0.22),opacity:.85}));
+    svg.appendChild(el("rect",{x:X(i)-bw/2, y:Y(Math.max(b.o,b.c)),
+      width:bw, height:Math.max(.8, Math.abs(Y(b.o)-Y(b.c))),
+      fill:col, opacity:.85}));
+  });
+
+  // entry / stop / target
+  [["entry","var(--accent)","進場",ex.entry],
+   ["stop","var(--manip)","停損",ex.stop],
+   ["target","var(--dist)","停利",ex.target]].forEach(([k,col,lab,val]) => {
+    svg.appendChild(el("line",{x1:m.l,x2:m.l+iw,y1:Y(val),y2:Y(val),
+      stroke:col,"stroke-width":1.6,"stroke-dasharray":"6 4"}));
+    addRight(val, col, compact ? lab : `${lab} ${fmt(val)}`, 600);
+  });
+
+  // Spread labels vertically so none overprints another.
+  rightLabels.sort((a,b) => a.y - b.y);
+  const GAP = 13;
+  for (let i = 1; i < rightLabels.length; i++)
+    if (rightLabels[i].y - rightLabels[i-1].y < GAP)
+      rightLabels[i].y = rightLabels[i-1].y + GAP;
+  const overflow = rightLabels.length
+    ? Math.max(0, rightLabels[rightLabels.length-1].y - (m.t+ih)) : 0;
+  rightLabels.forEach(L => {
+    const y = L.y - overflow;
+    const t = el("text",{x:m.l+iw+9, y:y+4, fill:L.col, "font-size":10.5,
+      "font-family":"var(--mono)", "font-weight":L.weight});
+    t.textContent = L.text; svg.appendChild(t);
+  });
+
+  // event markers
+  const mark = (time, price, col, label, above) => {
+    const i = idxOf(time);
+    svg.appendChild(el("circle",{cx:X(i), cy:Y(price), r:4.2, fill:col,
+      stroke:"var(--panel)","stroke-width":1.6}));
+    const dy = above ? -12 : 18;
+    const t = el("text",{x:X(i), y:Y(price)+dy, "text-anchor":"middle", fill:col,
+      "font-size":10.5,"font-family":"var(--mono)","font-weight":600});
+    t.textContent = label; svg.appendChild(t);
+  };
+  mark(ex.sweep_ts, ex.sweep_extreme, "var(--manip)",
+       compact ? "掃針" : `掃針 ${ex.sweep_ts}`, ex.direction < 0);
+  const cIdx = idxOf(ex.confirmation_ts);
+  svg.appendChild(el("line",{x1:X(cIdx),x2:X(cIdx),y1:m.t,y2:m.t+ih,
+    stroke:"var(--dist)","stroke-width":1.3,"stroke-dasharray":"3 3",opacity:.8}));
+  const ct = el("text",{x:X(cIdx)+5, y:m.t+13, fill:"var(--dist)",
+    "font-size":10.5,"font-family":"var(--mono)","font-weight":600});
+  ct.textContent = compact ? "CHoCH" : `CHoCH ${ex.confirmation_ts}`;
+  svg.appendChild(ct);
+  if (ex.entry_ts) mark(ex.entry_ts, ex.entry, "var(--accent)",
+       compact ? "成交" : `成交 ${ex.entry_ts}`, true);
+  if (ex.exit_ts) mark(ex.exit_ts, ex.exit_price,
+       ex.r_multiple >= 0 ? "var(--dist)" : "var(--manip)",
+       compact ? (ex.r_multiple>=0?"停利":"停損") : `出場 ${ex.exit_ts}`,
+       ex.r_multiple < 0);
+
+  // time axis
+  const ticks = compact ? ["20:00","04:00","09:30","13:00"]
+                        : ["20:00","00:00","04:00","08:00","09:30","11:00","13:00","15:00"];
+  ticks.forEach(t => {
+    const i = bars.findIndex(b => b.t === t);
+    if (i < 0) return;
+    svg.appendChild(el("line",{x1:X(i),x2:X(i),y1:m.t+ih,y2:m.t+ih+5,
+      stroke:"var(--ink-3)","stroke-width":1,opacity:.5}));
+    const tx = el("text",{x:X(i), y:H-14, "text-anchor":"middle", fill:"var(--ink-3)",
+      "font-size":10.5,"font-family":"var(--mono)"});
+    tx.textContent = t; svg.appendChild(tx);
+  });
+  const lab = el("text",{x:m.l, y:H-14, fill:"var(--ink-3)", "font-size":10,
+    "font-family":"var(--mono)"});
+  document.getElementById(hostId).appendChild(svg);
+}
+
+/* ---------- planned reward:risk histogram ---------- */
+function rrChart(){
+  const vals = EX.rr_values;
+  const W = 520, H = 300, m = {l:44, r:16, t:20, b:44};
+  const iw = W-m.l-m.r, ih = H-m.t-m.b;
+  const edges = [0,0.5,1,1.5,2,2.5,3,4,8];
+  const counts = edges.slice(0,-1).map((lo,i) =>
+    vals.filter(v => v >= lo && v < edges[i+1]).length);
+  const maxC = Math.max(...counts);
+  const svg = el("svg",{viewBox:`0 0 ${W} ${H}`, width:W, role:"img",
+    "aria-label":"51 張訂單的計畫報酬風險比分布，16 張低於 1:1"});
+
+  for (let c = 0; c <= maxC; c += Math.ceil(maxC/4)){
+    const y = m.t + ih - c/maxC*ih;
+    svg.appendChild(el("line",{x1:m.l,x2:m.l+iw,y1:y,y2:y,
+      stroke:"var(--rule-2)","stroke-width":1}));
+    const t = el("text",{x:m.l-8,y:y+4,"text-anchor":"end",fill:"var(--ink-3)",
+      "font-size":10.5,"font-family":"var(--mono)"}); t.textContent=c; svg.appendChild(t);
+  }
+  const bw = iw/counts.length;
+  counts.forEach((c,i) => {
+    const below = edges[i+1] <= 1;
+    const h = c/maxC*ih;
+    svg.appendChild(el("rect",{x:m.l+i*bw+3, y:m.t+ih-h, width:bw-6,
+      height:Math.max(c?2:0,h), fill: below ? "var(--loss)" : "var(--accent)",
+      opacity: below ? .85 : .7, rx:2}));
+    if (c){ const t = el("text",{x:m.l+i*bw+bw/2, y:m.t+ih-h-6,"text-anchor":"middle",
+      fill:"var(--ink-2)","font-size":10.5,"font-family":"var(--mono)"});
+      t.textContent = c; svg.appendChild(t); }
+    const lx = el("text",{x:m.l+i*bw+bw/2, y:m.t+ih+16,"text-anchor":"middle",
+      fill:"var(--ink-3)","font-size":9.5,"font-family":"var(--mono)"});
+    lx.textContent = edges[i]+"–"+edges[i+1]; svg.appendChild(lx);
+  });
+  // 1:1 boundary
+  const x1 = m.l + 2*bw;
+  svg.appendChild(el("line",{x1, x2:x1, y1:m.t-4, y2:m.t+ih,
+    stroke:"var(--ink)","stroke-width":1.6}));
+  const bt = el("text",{x:x1+6, y:m.t+6, fill:"var(--ink)","font-size":10.5,
+    "font-family":"var(--mono)","font-weight":600});
+  bt.textContent = "1:1"; svg.appendChild(bt);
+  const ax = el("text",{x:m.l+iw/2, y:H-8,"text-anchor":"middle",fill:"var(--ink-3)",
+    "font-size":10.5,"font-family":"var(--mono)"});
+  ax.textContent = "計畫報酬 ÷ 風險（下單當下）"; svg.appendChild(ax);
+  document.getElementById("chart-rr").appendChild(svg);
+}
+
+/* ---------- funnel ---------- */
+function funnel(){
+  const rows = EX.funnel;
+  const W = 1060, rowH = 46, m = {l:200, r:150, t:16, b:16};
+  const H = m.t + rows.length*rowH + m.b, iw = W-m.l-m.r;
+  const max = rows[0][1];
+  const svg = el("svg",{viewBox:`0 0 ${W} ${H}`, width:W, role:"img",
+    "aria-label":"PO3 篩選漏斗：690 個交易日經過五道關卡後只剩 35 筆成交交易"});
+  rows.forEach(([label,n],i) => {
+    const y = m.t + i*rowH, w = n/max*iw;
+    const last = i === rows.length-1;
+    svg.appendChild(el("rect",{x:m.l, y:y+7, width:Math.max(2,w), height:rowH-16,
+      fill: last ? "var(--gain)" : (i>=rows.length-2 ? "var(--accent)" : "var(--acc)"),
+      opacity: last ? .8 : (0.22 + 0.5*(i/rows.length)), rx:2}));
+    const t = el("text",{x:m.l-14, y:y+rowH/2+4, "text-anchor":"end", fill:"var(--ink)",
+      "font-size":12,"font-family":"var(--mono)"});
+    t.textContent = label; svg.appendChild(t);
+    const v = el("text",{x:m.l+Math.max(2,w)+10, y:y+rowH/2+4, fill:"var(--ink)",
+      "font-size":12,"font-family":"var(--mono)","font-weight":600});
+    v.textContent = n; svg.appendChild(v);
+    if (i){
+      const prev = rows[i-1][1], drop = prev - n;
+      if (drop > 0){
+        const d = el("text",{x:m.l+Math.max(2,w)+52, y:y+rowH/2+4, fill:"var(--loss)",
+          "font-size":11,"font-family":"var(--mono)"});
+        d.textContent = `−${drop}`; svg.appendChild(d);
+      }
+    }
+  });
+  document.getElementById("chart-funnel").appendChild(svg);
+}
+
+candles("chart-win",  EX.win,  {W:1060, H:420, compact:false});
+candles("chart-loss", EX.loss, {W:520,  H:300, compact:true});
+rrChart();
+funnel();
+</script>
+

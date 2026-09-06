@@ -170,6 +170,9 @@ docs/           curriculum.md (40 堂課 + 30 策略) · glossary.md (術語→�
 - **[docs/DATABENTO_README.md](docs/DATABENTO_README.md)** — 原始資料說明（隨資料附上）。
 - **[docs/strategy_report.html](docs/strategy_report.html)** — 七套策略完整視覺化報告
   （[線上版](https://claude.ai/code/artifact/97822a07-7616-42a1-b874-5a404d67f460)）。
+- **[docs/po3_explainer.html](docs/po3_explainer.html)** — PO3 策略逐步拆解，
+  用回測裡兩筆真實交易的實際 K 棒
+  （[線上版](https://claude.ai/code/artifact/a5f37fe5-2994-4194-b41a-3370bcfdaffc)）。
 
 ## 常用指令
 

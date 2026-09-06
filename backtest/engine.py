@@ -175,10 +175,14 @@ def simulate(orders: pd.DataFrame, bars: pd.DataFrame, config: BacktestConfig | 
             "contracts": size,
         })
 
-    out = pd.concat(
-        [orders.reset_index(drop=True), pd.DataFrame(results)], axis=1
+    # Strategies already carry their own risk_points; keep theirs and drop the
+    # duplicate rather than emitting two identically named columns, which makes
+    # every downstream lookup return a DataFrame instead of a value.
+    computed = pd.DataFrame(results)
+    overlap = [c for c in computed.columns if c in orders.columns]
+    return pd.concat(
+        [orders.reset_index(drop=True), computed.drop(columns=overlap)], axis=1
     )
-    return out
 
 
 _RESULT_COLUMNS = [
