@@ -110,3 +110,26 @@ def test_rejects_an_invalid_ambiguity_policy():
 def test_missing_order_columns_fail_loudly():
     with pytest.raises(ValueError, match="missing columns"):
         simulate(pd.DataFrame([{"direction": 1}]), RISING)
+
+
+def test_through_fill_mode_requires_price_to_trade_past_the_limit():
+    """'touch' fills at the level; 'through' needs a tick beyond it.
+
+    At the limit price you are behind everyone already resting there, so a
+    level that is merely tagged may leave the order unfilled. For a model
+    taking thousands of trades this assumption dominates the result.
+    """
+    tagged = _bars([(101, 101.5, 100.0, 100.5), (100.5, 101, 100.2, 100.8)])
+    o = _order(entry_price=100.0, expires_at=TS[1], time_exit_ts=TS[1])
+
+    assert bool(simulate(o, tagged, BacktestConfig(entry_fill_mode="touch")).filled[0])
+    # Price reached exactly 100.00 and turned; a conservative fill says no.
+    assert not bool(simulate(o, tagged, BacktestConfig(entry_fill_mode="through")).filled[0])
+
+    through = _bars([(101, 101.5, 99.5, 100.5), (100.5, 101, 100.2, 100.8)])
+    assert bool(simulate(o, through, BacktestConfig(entry_fill_mode="through")).filled[0])
+
+
+def test_rejects_an_invalid_fill_mode():
+    with pytest.raises(ValueError, match="entry_fill_mode"):
+        BacktestConfig(entry_fill_mode="hopeful")

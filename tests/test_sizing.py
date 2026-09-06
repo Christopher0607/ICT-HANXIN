@@ -51,3 +51,36 @@ def test_micro_tick_value_is_the_default_for_granularity():
 def test_rejects_an_invalid_sizing_mode():
     with pytest.raises(ValueError, match="sizing"):
         BacktestConfig(sizing="martingale")
+
+
+def test_commission_default_matches_the_default_contract():
+    """Micro sizing with an E-mini fee is a hundred-fold cost overstatement.
+
+    Fixed-risk sizing buys roughly ten times as many micros as e-minis for the
+    same dollar risk, so pairing the E-mini per-contract fee with the micro tick
+    value multiplies the fee by ten while dividing the tick value by ten.
+    """
+    from backtest.engine import COMMISSION_MNQ, COMMISSION_NQ
+
+    cfg = BacktestConfig()
+    assert cfg.tick_value == TICK_VALUE_MNQ
+    assert cfg.commission_per_round_turn == COMMISSION_MNQ
+    assert COMMISSION_MNQ < COMMISSION_NQ
+
+
+def test_fees_scale_inversely_with_stop_distance():
+    """Fixed risk means a tighter stop buys more contracts, so fees rise.
+
+    This is the economics, not a defect: at a fixed dollar risk the contract
+    count is inversely proportional to the stop distance, and the per-contract
+    fee rides on the count. It sets a floor on the stop distance a model can
+    profitably use, and it is why the same fee assumption that barely touches a
+    70-point stop can dominate a 5-point one.
+    """
+    cfg = BacktestConfig(risk_per_trade_usd=500.0)
+    fee = lambda stop: cfg.size_for(stop) * cfg.commission_per_round_turn
+
+    assert fee(5.0) > fee(20.0) > fee(69.0)
+    # A wide stop pays almost nothing; a very tight one pays a tenth of its risk.
+    assert fee(69.0) / 500.0 < 0.01
+    assert fee(5.0) / 500.0 > 0.10

@@ -35,6 +35,16 @@ TICK_SIZE = 0.25
 TICK_VALUE_NQ = 5.00   # $ per tick, E-mini NQ
 TICK_VALUE_MNQ = 0.50  # $ per tick, Micro MNQ
 
+#: All-in round-turn cost per contract (commission + exchange + NFA fees).
+#: These must be paired with the matching tick value. Charging the E-mini rate
+#: on micro contracts is a silent and severe error: fixed-risk sizing buys ten
+#: times as many micros as e-minis for the same risk, so the per-contract fee is
+#: multiplied by ten while the tick value is divided by ten -- a hundred-fold
+#: overstatement of costs that falls hardest on tight-stop, high-frequency
+#: models and can turn a profitable one into a loser.
+COMMISSION_NQ = 4.00
+COMMISSION_MNQ = 1.24
+
 
 @dataclass(frozen=True)
 class BacktestConfig:
@@ -44,7 +54,8 @@ class BacktestConfig:
     #: budget against a 69-point stop is 0.36 E-mini contracts (untradeable)
     #: but 3 micros. Set TICK_VALUE_NQ to size in E-minis instead.
     tick_value: float = TICK_VALUE_MNQ
-    commission_per_round_turn: float = 4.00
+    #: Paired with tick_value above. Use COMMISSION_NQ with TICK_VALUE_NQ.
+    commission_per_round_turn: float = COMMISSION_MNQ
     entry_slippage_ticks: float = 0.0   # limit orders fill at their price or better
     exit_slippage_ticks: float = 1.0    # stops are market orders and do slip
     ambiguity: str = "pessimistic"      # or "optimistic"
@@ -57,6 +68,16 @@ class BacktestConfig:
     #: twenty times the weight of the tightest, so the equity curve measures
     #: stop placement rather than edge. That is precisely what sank the first
     #: PO3 run: a 60% win rate with an average loss larger than the average win.
+    #: How a resting limit order is deemed filled.
+    #:
+    #: "touch" counts the order filled the moment price reaches the limit. That
+    #: is optimistic: at the limit price you are last in the queue, and in a
+    #: fast market the level can be tagged and abandoned with your order unfilled.
+    #: "through" requires price to trade a tick beyond the limit, which is the
+    #: conservative reading. The gap between them is a high-frequency model's
+    #: single largest execution risk, so it is worth running both.
+    entry_fill_mode: str = "touch"
+
     sizing: str = "fixed_risk"
     risk_per_trade_usd: float = 500.0
     contracts: int = 1
@@ -67,6 +88,8 @@ class BacktestConfig:
             raise ValueError("ambiguity must be 'pessimistic' or 'optimistic'")
         if self.sizing not in ("fixed_risk", "fixed_contracts"):
             raise ValueError("sizing must be 'fixed_risk' or 'fixed_contracts'")
+        if self.entry_fill_mode not in ("touch", "through"):
+            raise ValueError("entry_fill_mode must be 'touch' or 'through'")
 
     def size_for(self, risk_points: float) -> int:
         """Contracts to trade given the stop distance, or 0 to skip the trade.
@@ -142,7 +165,8 @@ def simulate(orders: pd.DataFrame, bars: pd.DataFrame, config: BacktestConfig | 
             results.append(_unfilled(order, reason="oversized"))
             continue
 
-        fill_index = _find_fill(low, high, start, expiry, entry, direction)
+        fill_index = _find_fill(low, high, start, expiry, entry, direction,
+                                config.entry_fill_mode)
         if fill_index is None:
             results.append(_unfilled(order))
             continue
@@ -202,11 +226,12 @@ def _unfilled(order: pd.Series, reason: str = "expired") -> dict:
     }
 
 
-def _find_fill(low, high, start, expiry, entry, direction) -> int | None:
-    """First bar whose range reaches the limit price."""
+def _find_fill(low, high, start, expiry, entry, direction, mode="touch") -> int | None:
+    """First bar at which the resting limit order is deemed filled."""
+    edge = 0.0 if mode == "touch" else TICK_SIZE
     for i in range(start, expiry):
-        touched = low[i] <= entry if direction > 0 else high[i] >= entry
-        if touched:
+        reached = (low[i] <= entry - edge) if direction > 0 else (high[i] >= entry + edge)
+        if reached:
             return i
     return None
 

@@ -120,9 +120,19 @@ def resample_1m_to_5m(df1m: pd.DataFrame) -> pd.DataFrame:
     Matches the aggregation described in docs/DATABENTO_README.md, and is used
     by the test suite to verify the shipped 5-minute file bar for bar.
     """
+    return resample(df1m, "5min")
+
+
+def resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
+    """Aggregate OHLCV bars to a coarser interval on UTC epoch boundaries.
+
+    Epoch origin keeps every coarser interval aligned with the finer ones, and
+    with the New York session: 09:30 ET falls on a 5-, 15- and 30-minute
+    boundary in both daylight and standard time.
+    """
     agg = (
-        df1m.set_index("ts")
-        .resample("5min", origin="epoch", label="left", closed="left")
+        df.set_index("ts")
+        .resample(rule, origin="epoch", label="left", closed="left")
         .agg(open=("open", "first"), high=("high", "max"),
              low=("low", "min"), close=("close", "last"),
              volume=("volume", "sum"))
