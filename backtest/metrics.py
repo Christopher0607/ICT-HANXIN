@@ -121,3 +121,56 @@ def monte_carlo(trades: pd.DataFrame, runs: int = 2000, seed: int = 0) -> dict:
         "median_final_pnl": float(np.median(finals)),
         "prob_negative": float((finals < 0).mean()),
     }
+
+
+def rolling_windows(trades: pd.DataFrame, months: int, step_months: int = 1) -> pd.DataFrame:
+    """Performance of every ``months``-long window across the trade history.
+
+    A single recent window looking good proves very little on its own: some
+    window always looks best, and the most recent one is the one you were most
+    likely to go looking at. Scoring *every* window puts the current one in a
+    distribution, so "the last three months had a profit factor of 2.2" can be
+    answered with "and so did N% of all three-month windows".
+
+    Windows are stepped by ``step_months`` and scored on the trades that closed
+    inside them, reusing :func:`summarize`. Windows with fewer than five trades
+    are dropped: a profit factor computed on two trades is noise with a decimal
+    point.
+    """
+    filled = trades[trades["filled"]].copy() if "filled" in trades else trades.copy()
+    if filled.empty:
+        return pd.DataFrame(columns=["start", "end", "trades", "win_rate",
+                                     "profit_factor", "total_pnl", "avg_r"])
+
+    exits = pd.DatetimeIndex(filled["exit_ts"]).tz_convert("UTC")
+    filled = filled.assign(_exit=exits).sort_values("_exit")
+    first, last = exits.min(), exits.max()
+
+    rows, start = [], first
+    while start + pd.DateOffset(months=months) <= last + pd.DateOffset(days=1):
+        end = start + pd.DateOffset(months=months)
+        window = filled[(filled["_exit"] >= start) & (filled["_exit"] < end)]
+        if len(window) >= 5:
+            s = summarize(window)
+            rows.append({
+                "start": start, "end": end, "trades": s["trades"],
+                "win_rate": s["win_rate"], "profit_factor": s["profit_factor"],
+                "total_pnl": s["total_pnl"], "avg_r": s["avg_r"],
+            })
+        start = start + pd.DateOffset(months=step_months)
+
+    return pd.DataFrame(rows)
+
+
+def window_percentile(windows: pd.DataFrame, value: float, column: str = "profit_factor") -> float:
+    """Share of windows scoring at or below ``value``, as a percentage.
+
+    A current window at the 95th percentile is genuinely unusual; one at the
+    60th is an ordinary good patch.
+    """
+    if windows.empty:
+        return float("nan")
+    series = windows[column].replace([float("inf")], float("nan")).dropna()
+    if series.empty:
+        return float("nan")
+    return float((series <= value).mean() * 100.0)
