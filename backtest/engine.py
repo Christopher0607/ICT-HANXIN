@@ -78,6 +78,14 @@ class BacktestConfig:
     #: single largest execution risk, so it is worth running both.
     entry_fill_mode: str = "touch"
 
+    #: The same question for the profit target, which is also a resting limit.
+    #: It matters most exactly where the entry assumption matters least: a tight
+    #: target is touched often and briefly, so a sweep that concludes "smaller
+    #: targets are better" may be measuring the fill assumption rather than the
+    #: market. The stop is deliberately excluded -- it is a market order, and a
+    #: touch really does trigger it.
+    exit_fill_mode: str = "touch"
+
     sizing: str = "fixed_risk"
     risk_per_trade_usd: float = 500.0
     contracts: int = 1
@@ -90,6 +98,8 @@ class BacktestConfig:
             raise ValueError("sizing must be 'fixed_risk' or 'fixed_contracts'")
         if self.entry_fill_mode not in ("touch", "through"):
             raise ValueError("entry_fill_mode must be 'touch' or 'through'")
+        if self.exit_fill_mode not in ("touch", "through"):
+            raise ValueError("exit_fill_mode must be 'touch' or 'through'")
 
     def size_for(self, risk_points: float) -> int:
         """Contracts to trade given the stop distance, or 0 to skip the trade.
@@ -175,6 +185,7 @@ def simulate(orders: pd.DataFrame, bars: pd.DataFrame, config: BacktestConfig | 
         exit_index, exit_price, reason = _resolve_exit(
             open_, high, low, close, fill_index, final,
             direction, stop, target, slip_out, pessimistic,
+            TICK_SIZE if config.exit_fill_mode == "through" else 0.0,
         )
         ambiguous = _bar_contains_both(high, low, fill_index, exit_index, stop, target)
 
@@ -237,15 +248,15 @@ def _find_fill(low, high, start, expiry, entry, direction, mode="touch") -> int 
 
 
 def _resolve_exit(open_, high, low, close, fill_index, final,
-                  direction, stop, target, slip_out, pessimistic):
+                  direction, stop, target, slip_out, pessimistic, target_edge=0.0):
     """Walk forward from the fill until stop, target or the time exit."""
     for i in range(fill_index, final):
         if direction > 0:
             hit_stop = low[i] <= stop
-            hit_target = high[i] >= target
+            hit_target = high[i] >= target + target_edge
         else:
             hit_stop = high[i] >= stop
-            hit_target = low[i] <= target
+            hit_target = low[i] <= target - target_edge
 
         if hit_stop and hit_target:
             # Both levels inside one 1-minute bar: unresolvable from OHLC.

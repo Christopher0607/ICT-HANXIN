@@ -133,3 +133,30 @@ def test_through_fill_mode_requires_price_to_trade_past_the_limit():
 def test_rejects_an_invalid_fill_mode():
     with pytest.raises(ValueError, match="entry_fill_mode"):
         BacktestConfig(entry_fill_mode="hopeful")
+
+
+def test_exit_fill_mode_governs_the_target_but_not_the_stop():
+    """A target is a resting limit; a stop is a market order.
+
+    The distinction matters most for tight targets, which are touched often and
+    briefly — so a reward-to-risk sweep that favours small targets has to be
+    checked against this assumption before it is believed.
+    """
+    tagged = _bars([(100, 100.2, 99.8, 100), (100, 102.0, 99.9, 101)])
+    o = _order(entry_price=100.5, stop_price=98.0, target_price=102.0,
+               expires_at=TS[1], time_exit_ts=TS[1])
+    # Price reached exactly 102.00.
+    assert simulate(o, tagged, BacktestConfig(exit_fill_mode="touch")).exit_reason[0] == "target"
+    assert simulate(o, tagged, BacktestConfig(exit_fill_mode="through")).exit_reason[0] != "target"
+
+    # The stop is unaffected: touching it still triggers.
+    s = _bars([(100, 100.2, 99.8, 100), (100, 100.1, 98.0, 98.5)])
+    o2 = _order(entry_price=100.0, stop_price=98.0, target_price=200.0,
+                expires_at=TS[0], time_exit_ts=TS[1])
+    for mode in ("touch", "through"):
+        assert simulate(o2, s, BacktestConfig(exit_fill_mode=mode)).exit_reason[0] == "stop"
+
+
+def test_rejects_an_invalid_exit_fill_mode():
+    with pytest.raises(ValueError, match="exit_fill_mode"):
+        BacktestConfig(exit_fill_mode="hopeful")

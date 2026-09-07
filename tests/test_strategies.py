@@ -98,3 +98,40 @@ def test_registry_exposes_every_strategy_module():
 def test_unknown_strategy_fails_loudly(bars):
     with pytest.raises(KeyError, match="unknown strategy"):
         registry.generate("does_not_exist", bars)
+
+
+@pytest.mark.parametrize("r", [0.5, 1.0, 1.5, 2.0, 3.0])
+def test_retarget_places_the_target_at_exactly_r_times_risk(r, orders):
+    from strategies.base import retarget
+
+    o = orders["ltf_sweep"] if "ltf_sweep" in orders else orders[registry.NAMES[0]]
+    if o.empty:
+        pytest.skip("no orders to retarget")
+    out = retarget(o, r)
+    risk = (out["entry_price"] - out["stop_price"]).abs()
+    reward = (out["target_price"] - out["entry_price"]).abs()
+    assert ((reward / risk - r).abs() < 1e-9).all()
+    # And the target stays on the profitable side of entry.
+    longs, shorts = out[out.direction == 1], out[out.direction == -1]
+    assert (longs.target_price > longs.entry_price).all()
+    assert (shorts.target_price < shorts.entry_price).all()
+
+
+def test_retarget_leaves_the_setup_untouched(orders):
+    """Only the target may move — everything that defines the trade is fixed."""
+    from strategies.base import retarget
+
+    o = orders[registry.NAMES[0]]
+    if o.empty:
+        pytest.skip("no orders")
+    out = retarget(o, 2.5)
+    fixed = ["signal_ts", "valid_from", "expires_at", "direction",
+             "entry_price", "stop_price", "time_exit_ts", "risk_points"]
+    pd.testing.assert_frame_equal(o[fixed], out[fixed])
+
+
+def test_retarget_rejects_a_non_positive_multiple(orders):
+    from strategies.base import retarget
+
+    with pytest.raises(ValueError, match="must be positive"):
+        retarget(orders[registry.NAMES[0]], 0.0)

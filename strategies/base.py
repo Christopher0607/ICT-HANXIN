@@ -156,3 +156,28 @@ def first_entry_after(
         & (events["confirmed_at"] <= until)
     ]
     return None if sel.empty else sel.iloc[0]
+
+
+def retarget(orders: pd.DataFrame, r: float) -> pd.DataFrame:
+    """Re-price every order's target to ``r`` multiples of its own risk.
+
+    ``target_r`` feeds nothing but the target price: the setup search, the
+    entry, the stop and the order's timing are all decided before the target is
+    computed, and none of ``build_order``'s rejection tests look at it. So
+    re-targeting an existing order set is exactly equivalent to regenerating it
+    with a different ``target_r`` — and it makes a reward-to-risk sweep a
+    controlled experiment rather than a comparison of different trade sets.
+
+    The same trades, the same fills, the same stops; only where the profit is
+    taken changes. Any difference in the results is therefore attributable to
+    the target and nothing else.
+    """
+    if r <= 0:
+        raise ValueError(f"r must be positive, got {r}")
+    if orders.empty:
+        return orders.copy()
+
+    out = orders.copy()
+    risk = (out["entry_price"] - out["stop_price"]).abs()
+    out["target_price"] = out["entry_price"] + out["direction"] * r * risk
+    return out
