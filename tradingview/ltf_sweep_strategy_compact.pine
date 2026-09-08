@@ -1,0 +1,281 @@
+//@version=6
+// LTF Sweep - 15m pool / 1m sweep / 1m CHoCH / FVG entry / fixed 1:1
+// Compact build of ltf_sweep_strategy.pine - edit that file, not this one.
+// Net negative over 10.7 years; profitable only since 2023. Evaluate on BAR
+// CLOSE and set alerts to "Once Per Bar Close". Keep this file pure ASCII.
+// Signals are evaluated on BAR CLOSE only. Set alerts to "Once Per Bar Close".
+
+strategy("LTF Sweep - 15m pool / 1m CHoCH / 1:1", "LTF Sweep", overlay = true, initial_capital = 25000, currency = currency.USD, default_qty_type = strategy.fixed, default_qty_value = 1, calc_on_every_tick = false, process_orders_on_close = false, max_boxes_count = 200, max_lines_count = 300, max_labels_count = 300)
+
+grpS = "Setup"
+lookbackCandles = input.int(4,    "15m candles forming the pool", minval=1, maxval=20, group=grpS)
+minPen          = input.float(0.25,"Minimum penetration (points)", minval=0.0, step=0.25, group=grpS)
+minFvgSize      = input.float(0.5, "Minimum FVG size (points)",    minval=0.0, step=0.25, group=grpS)
+confirmWithin   = input.int(30,   "CHoCH must follow within N bars", minval=1, group=grpS)
+pivotLen        = input.int(2,    "Swing pivot length",            minval=1, group=grpS)
+oneTradePerDay  = input.bool(true,"One trade per day",             group=grpS)
+
+grpR = "Risk"
+stopBuffer   = input.float(1.0,  "Stop buffer beyond extreme (pts)", minval=0.0, step=0.25, group=grpR)
+targetR      = input.float(1.0,  "Target (R multiple)",   minval=0.1, step=0.25, group=grpR)
+riskUSD      = input.float(500,  "Risk per trade (USD)",  minval=1,   group=grpR)
+pointValue   = input.float(2.0,  "$ per point (MNQ=2, NQ=20)", minval=0.01, group=grpR)
+minRiskPts   = input.float(1.0,  "Min risk (points)",     minval=0.0, group=grpR)
+maxRiskPts   = input.float(120.0,"Max risk (points)",     minval=1.0, group=grpR)
+
+grpT = "Session (exchange time of the chart symbol)"
+sweepWindow  = input.session("0930-1500", "Sweeps accepted",   group=grpT)
+entryWindow  = input.session("0930-1530", "Limit order live",  group=grpT)
+tradeSession = input.session("0930-1600", "Session / flat by", group=grpT)
+tz           = input.string("America/New_York", "Timezone",    group=grpT)
+
+grpV = "Display"
+showPool  = input.bool(true, "15m liquidity pool",  group=grpV)
+showFvg   = input.bool(true, "FVG boxes",           group=grpV)
+showLevels= input.bool(true, "Entry / stop / target", group=grpV)
+showTable = input.bool(true, "Status table",        group=grpV)
+
+grpA = "Alerts"
+alertTemplate = input.string(
+     '{"strategy":"ltf_sweep","action":"{0}","symbol":"{1}","qty":{2},"entry":{3},"stop":{4},"target":{5},"risk_points":{6},"time":"{7}"}',
+     "Alert JSON template", group=grpA,
+     tooltip="Placeholders: {0} action  {1} symbol  {2} qty  {3} entry  {4} stop  {5} target  {6} risk points  {7} ISO time")
+
+inSweepWin = not na(time(timeframe.period, sweepWindow,  tz))
+inEntryWin = not na(time(timeframe.period, entryWindow,  tz))
+inSession  = not na(time(timeframe.period, tradeSession, tz))
+sessionOpen = inSession and not inSession[1]
+sessionEnd  = not inSession and inSession[1]
+
+var int barsSinceOpen = 0
+barsSinceOpen := sessionOpen ? 1 : inSession ? barsSinceOpen + 1 : 0
+
+// The [1] offset and lookahead_on are interdependent: together they return the
+// last CLOSED 15m bar's value. Removing either reintroduces lookahead bias.
+poolHigh = request.security(syminfo.tickerid, "15", ta.highest(high, lookbackCandles)[1], lookahead = barmerge.lookahead_on)
+poolLow  = request.security(syminfo.tickerid, "15", ta.lowest(low,   lookbackCandles)[1], lookahead = barmerge.lookahead_on)
+
+ph = ta.pivothigh(high, pivotLen, pivotLen)
+pl = ta.pivotlow(low,   pivotLen, pivotLen)
+
+pivotReady = barsSinceOpen > (pivotLen * 2)
+
+var float pendHigh = na
+var float pendLow  = na
+var int   trendDir = 0
+
+if sessionOpen
+    pendHigh := na
+    pendLow  := na
+    trendDir := 0
+
+bullBreak = inSession and not na(pendHigh) and close > pendHigh
+bearBreak = inSession and not na(pendLow)  and close < pendLow
+bullChoch = bullBreak and trendDir < 0
+bearChoch = bearBreak and trendDir > 0
+brokenLevel = bullBreak ? pendHigh : bearBreak ? pendLow : na
+
+if bullBreak
+    trendDir := 1
+    pendHigh := na
+else if bearBreak
+    trendDir := -1
+    pendLow  := na
+
+if pivotReady and not na(ph)
+    pendHigh := ph
+if pivotReady and not na(pl)
+    pendLow := pl
+
+fvgReady   = barsSinceOpen > 3
+bullFvg    = fvgReady and low > high[2] and (low - high[2]) >= minFvgSize
+bearFvg    = fvgReady and high < low[2] and (low[2] - high) >= minFvgSize
+bullFvgTop = low
+bullFvgBot = high[2]
+bearFvgTop = low[2]
+bearFvgBot = high
+
+var int    stage      = 0     // 0 waiting, 1 swept, 2 order working
+var int    setupDir   = 0     // +1 long, -1 short
+var float  sweptLevel = na
+var float  protective = na    // furthest point reached against the trade
+var int    sweepBar   = 0
+var float  fvgTop     = na
+var float  fvgBot     = na
+var bool   tradedToday= false
+var float  entryPx    = na
+var float  stopPx     = na
+var float  targetPx   = na
+var int    qty        = 0
+
+if sessionOpen
+    stage       := 0
+    setupDir    := 0
+    sweepBar    := 0
+    sweptLevel  := na
+    protective  := na
+    fvgTop      := na
+    fvgBot      := na
+    tradedToday := false
+    entryPx     := na
+    stopPx      := na
+    targetPx    := na
+    qty         := 0
+
+sweepHigh = inSweepWin and stage == 0 and not tradedToday and not na(poolHigh) and high > poolHigh + minPen and close < poolHigh
+sweepLow  = inSweepWin and stage == 0 and not tradedToday and not na(poolLow)  and low  < poolLow  - minPen and close > poolLow
+
+if sweepHigh
+    stage      := 1
+    setupDir   := -1
+    sweptLevel := poolHigh
+    protective := high
+    sweepBar   := bar_index
+    fvgTop     := na
+    fvgBot     := na
+else if sweepLow
+    stage      := 1
+    setupDir   := 1
+    sweptLevel := poolLow
+    protective := low
+    sweepBar   := bar_index
+    fvgTop     := na
+    fvgBot     := na
+
+// afterSweep enforces the research version's `confirmed_at > sweep_confirmed`:
+afterSweep = stage == 1 and bar_index > sweepBar
+if stage == 1
+    protective := setupDir == 1 ? math.min(protective, low) : math.max(protective, high)
+    if afterSweep and setupDir == 1 and bullFvg
+        fvgTop := bullFvgTop
+        fvgBot := bullFvgBot
+    if afterSweep and setupDir == -1 and bearFvg
+        fvgTop := bearFvgTop
+        fvgBot := bearFvgBot
+
+expired = stage == 1 and (bar_index - sweepBar) > confirmWithin
+if expired
+    stage := 0
+    setupDir := 0
+
+confirmed = afterSweep and not na(fvgTop) and ((setupDir == 1 and bullChoch) or (setupDir == -1 and bearChoch))
+
+if confirmed
+    e = (fvgTop + fvgBot) / 2.0
+    s = setupDir == 1 ? protective - stopBuffer : protective + stopBuffer
+    r = math.abs(e - s)
+    ok = r >= minRiskPts and r <= maxRiskPts and (setupDir == 1 ? s < e : s > e)
+    q = ok ? int(math.floor(riskUSD / (r * pointValue))) : 0
+    if ok and q >= 1
+        entryPx  := e
+        stopPx   := s
+        targetPx := e + setupDir * targetR * r
+        qty      := q
+        stage    := 2
+    else
+        stage    := 0
+        setupDir := 0
+
+isoTime  = str.format_time(time, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC")
+msg(action, q, e, s, t, rp) =>
+    str.format(alertTemplate, action, syminfo.ticker, q,
+               str.tostring(e, format.mintick), str.tostring(s, format.mintick),
+               str.tostring(t, format.mintick), str.tostring(rp, "#.##"), isoTime)
+
+riskPts = na(entryPx) or na(stopPx) ? 0.0 : math.abs(entryPx - stopPx)
+
+if stage == 2 and strategy.position_size == 0 and strategy.opentrades == 0
+    if setupDir == 1
+        strategy.entry("LTF", strategy.long, qty = qty, limit = entryPx,
+             alert_message = msg("buy", qty, entryPx, stopPx, targetPx, riskPts))
+    else
+        strategy.entry("LTF", strategy.short, qty = qty, limit = entryPx,
+             alert_message = msg("sell", qty, entryPx, stopPx, targetPx, riskPts))
+
+if strategy.position_size != 0
+    strategy.exit("LTF x", "LTF", stop = stopPx, limit = targetPx,
+         alert_message = msg("exit", qty, entryPx, stopPx, targetPx, riskPts))
+
+justFilled = strategy.position_size != 0 and strategy.position_size[1] == 0
+if justFilled
+    tradedToday := oneTradePerDay ? true : tradedToday
+
+if stage == 2 and not inEntryWin and strategy.position_size == 0
+    strategy.cancel("LTF")
+    stage := 0
+    setupDir := 0
+
+if sessionEnd
+    strategy.cancel_all()
+    if strategy.position_size != 0
+        strategy.close_all(comment = "session end",
+             alert_message = msg("close", qty, entryPx, stopPx, targetPx, riskPts))
+    stage := 0
+    setupDir := 0
+
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    stage := 0
+    setupDir := 0
+
+poolBroken = stage >= 1
+plot(showPool and inSession and not na(poolHigh) ? poolHigh : na, "Pool high",
+     color = poolBroken and setupDir == -1 ? color.new(color.red, 20) : color.new(#4a3aa7, 35),
+     style = plot.style_stepline, linewidth = 1)
+plot(showPool and inSession and not na(poolLow) ? poolLow : na, "Pool low",
+     color = poolBroken and setupDir == 1 ? color.new(color.green, 20) : color.new(#4a3aa7, 35),
+     style = plot.style_stepline, linewidth = 1)
+
+bgcolor(inSession ? color.new(color.blue, 96) : na, title = "Session")
+
+plotshape(sweepHigh, "Sweep high", shape.triangledown, location.abovebar,
+     color.new(color.red, 0), size = size.tiny)
+plotshape(sweepLow,  "Sweep low",  shape.triangleup,   location.belowbar,
+     color.new(color.green, 0), size = size.tiny)
+plotshape(confirmed and setupDir == 1,  "CHoCH up",   shape.diamond, location.belowbar,
+     color.new(#15734a, 0), size = size.tiny)
+plotshape(confirmed and setupDir == -1, "CHoCH down", shape.diamond, location.abovebar,
+     color.new(#c0322f, 0), size = size.tiny)
+
+if showFvg and confirmed
+    box.new(bar_index, fvgTop, bar_index + 20, fvgBot,
+         border_color = color.new(#eda100, 40), bgcolor = color.new(#eda100, 80))
+    if not na(brokenLevel)
+        line.new(bar_index - 3, brokenLevel, bar_index + 8, brokenLevel,
+             color = color.new(#5a6572, 30), style = line.style_dotted)
+
+plot(showLevels and stage == 2 and not na(entryPx) ? entryPx : na, "Entry",
+     color.new(#1f4b8f, 0), style = plot.style_linebr, linewidth = 1)
+plot(showLevels and strategy.position_size != 0 and not na(stopPx) ? stopPx : na, "Stop",
+     color.new(#c0322f, 0), style = plot.style_linebr, linewidth = 1)
+plot(showLevels and strategy.position_size != 0 and not na(targetPx) ? targetPx : na, "Target",
+     color.new(#15734a, 0), style = plot.style_linebr, linewidth = 1)
+
+var table info = table.new(position.top_right, 2, 7,
+     bgcolor = color.new(color.black, 20), border_width = 1)
+if showTable and barstate.islast
+    state = strategy.position_size != 0 ? "IN TRADE"
+             : stage == 2 ? "order working"
+             : stage == 1 ? "swept - awaiting CHoCH"
+             : tradedToday ? "done for today" : "waiting"
+    table.cell(info, 0, 0, "LTF Sweep", text_color = color.white, text_size = size.small)
+    table.cell(info, 1, 0, state, text_color = color.yellow, text_size = size.small)
+    table.cell(info, 0, 1, stage >= 1 ? "swept level" : "pool hi/lo",
+         text_color = color.gray, text_size = size.tiny)
+    table.cell(info, 1, 1, stage >= 1 and not na(sweptLevel) ? str.tostring(sweptLevel, format.mintick)
+         : str.tostring(poolHigh, format.mintick) + " / " + str.tostring(poolLow, format.mintick),
+         text_color = color.white, text_size = size.tiny)
+    table.cell(info, 0, 2, "direction", text_color = color.gray, text_size = size.tiny)
+    table.cell(info, 1, 2, setupDir == 1 ? "LONG" : setupDir == -1 ? "SHORT" : "-",
+         text_color = setupDir == 1 ? color.lime : setupDir == -1 ? color.red : color.gray, text_size = size.tiny)
+    table.cell(info, 0, 3, "entry", text_color = color.gray, text_size = size.tiny)
+    table.cell(info, 1, 3, na(entryPx) ? "-" : str.tostring(entryPx, format.mintick),
+         text_color = color.white, text_size = size.tiny)
+    table.cell(info, 0, 4, "stop / target", text_color = color.gray, text_size = size.tiny)
+    table.cell(info, 1, 4, na(stopPx) ? "-" : str.tostring(stopPx, format.mintick) + " / " + str.tostring(targetPx, format.mintick),
+         text_color = color.white, text_size = size.tiny)
+    table.cell(info, 0, 5, "risk / qty", text_color = color.gray, text_size = size.tiny)
+    table.cell(info, 1, 5, str.tostring(riskPts, "#.##") + " pts - " + str.tostring(qty) + " ct",
+         text_color = color.white, text_size = size.tiny)
+    table.cell(info, 0, 6, "risk $", text_color = color.gray, text_size = size.tiny)
+    table.cell(info, 1, 6, "$" + str.tostring(riskPts * pointValue * qty, "#"),
+         text_color = color.white, text_size = size.tiny)

@@ -19,7 +19,8 @@ import re
 import pytest
 
 PINE_DIR = pathlib.Path(__file__).resolve().parent.parent / "tradingview"
-SCRIPTS = sorted(PINE_DIR.glob("*.pine"))
+SCRIPTS = sorted(p for p in PINE_DIR.glob("*.pine") if not p.stem.endswith("_compact"))
+COMPACT = sorted(PINE_DIR.glob("*_compact.pine"))
 
 
 def strip_comments_and_strings(src: str) -> str:
@@ -31,6 +32,21 @@ def test_both_scripts_exist():
     assert {p.name for p in SCRIPTS} == {
         "ltf_sweep_strategy.pine", "ltf_sweep_indicator.pine"
     }
+    assert {p.name for p in COMPACT} == {
+        "ltf_sweep_strategy_compact.pine", "ltf_sweep_indicator_compact.pine"
+    }
+
+
+def code_lines(src: str) -> list[str]:
+    """Executable lines only: comments and blank lines removed."""
+    out = []
+    for line in src.split("\n"):
+        if line.strip().startswith("//"):
+            continue
+        line = re.sub(r"\s+//.*$", "", line).rstrip()
+        if line.strip():
+            out.append(line)
+    return out
 
 
 @pytest.mark.parametrize("path", SCRIPTS, ids=lambda p: p.name)
@@ -112,3 +128,38 @@ def test_the_two_scripts_share_one_core_verbatim():
     core_i = indic[indic.index("// -- inputs"):indic.index("// -- simulated position")]
     assert core_s.strip() == core_i.strip()
     assert len(core_s.strip().split("\n")) > 150, "core looks truncated"
+
+
+@pytest.mark.parametrize("compact", COMPACT, ids=lambda p: p.name)
+def test_compact_build_matches_its_source_line_for_line(compact):
+    """The compact builds exist only to be smaller, never to be different.
+
+    A mobile clipboard truncated a 17 KB paste one line from the end, so the
+    scripts also ship stripped of their prose. If the two ever diverge, the
+    one that gets pasted is no longer the one that was checked.
+    """
+    full = compact.with_name(compact.name.replace("_compact", ""))
+    assert code_lines(full.read_text()) == code_lines(compact.read_text())
+
+
+@pytest.mark.parametrize("compact", COMPACT, ids=lambda p: p.name)
+def test_compact_build_is_smaller_and_still_ascii(compact):
+    full = compact.with_name(compact.name.replace("_compact", ""))
+    assert len(compact.read_text()) < len(full.read_text())
+    assert all(ord(c) < 128 for c in compact.read_text())
+
+
+@pytest.mark.parametrize("compact", COMPACT, ids=lambda p: p.name)
+def test_compact_build_keeps_the_invariants_that_fail_silently(compact):
+    """Stripping prose must not strip the two warnings that matter.
+
+    Lookahead bias and same-bar confirmation both produce a script that runs
+    fine and reports numbers that are wrong, so the comments guarding them earn
+    their bytes even in the small build.
+    """
+    src = compact.read_text()
+    assert src.startswith("//@version=6")
+    assert "lookahead = barmerge.lookahead_on" in src
+    assert "afterSweep = stage == 1 and bar_index > sweepBar" in src
+    assert "int(math.floor(riskUSD" in src
+    assert "lookahead" in "".join(l for l in src.split("\n") if l.strip().startswith("//"))

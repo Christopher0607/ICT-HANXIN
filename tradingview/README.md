@@ -51,6 +51,27 @@ Pine Editor**，而那條路徑會把 UTF-8 搞壞。
 
 `tests/test_tradingview_assets.py` 會擋下任何非 ASCII 字元。改腳本時請維持純 ASCII。
 
+## 手機貼上請用 `_compact` 版
+
+實測過一次：17 KB 的檔案在手機剪貼簿被截斷，編輯器裡最後一行停在
+`table.cell(info, 1, 6, "$" + st`，然後報 `Missing closing parenthesis` ——
+錯誤指向最後一行，看不出是傳輸問題。
+
+所以每份腳本都有一個精簡版，**程式碼逐行相同**，只是拿掉了說明性註解：
+
+| 檔案 | 大小 | 用途 |
+|---|---|---|
+| `ltf_sweep_strategy.pine` | 15.8 KB | 完整版，桌機用、看註解 |
+| `ltf_sweep_strategy_compact.pine` | 12.8 KB | **手機貼這個** |
+| `ltf_sweep_indicator.pine` | 15.5 KB | 完整版 |
+| `ltf_sweep_indicator_compact.pine` | 12.5 KB | **手機貼這個** |
+
+精簡版由 `scripts/make_compact_pine.py` 產生，
+`tests/test_tradingview_assets.py` 會驗證兩者的程式碼逐行一致 ——
+改了本體忘記重新產生，測試就會失敗。
+
+**貼完務必檢查最後一行是不是完整的** `text_color = color.white, text_size = size.tiny)`。
+
 ## 安裝
 
 1. TradingView → Pine Editor → 貼上 → Save → Add to chart
