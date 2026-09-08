@@ -1,6 +1,6 @@
 //@version=6
 // =============================================================================
-// LTF Liquidity Sweep  ·  15m pool -> 1m sweep -> 1m CHoCH -> FVG entry -> 1:1
+// LTF Liquidity Sweep  -  15m pool -> 1m sweep -> 1m CHoCH -> FVG entry -> 1:1
 // =============================================================================
 // Port of strategies/ltf_sweep.py from the ICT-HANXIN research repo.
 //
@@ -27,19 +27,9 @@
 // Signals are evaluated on BAR CLOSE only. Set alerts to "Once Per Bar Close".
 // =============================================================================
 
-strategy("LTF Sweep  ·  15m pool / 1m CHoCH / 1:1", "LTF Sweep",
-     overlay              = true,
-     initial_capital      = 25000,
-     currency             = currency.USD,
-     default_qty_type     = strategy.fixed,
-     default_qty_value    = 1,
-     calc_on_every_tick   = false,
-     process_orders_on_close = false,
-     max_boxes_count      = 200,
-     max_lines_count      = 300,
-     max_labels_count     = 300)
+strategy("LTF Sweep - 15m pool / 1m CHoCH / 1:1", "LTF Sweep", overlay = true, initial_capital = 25000, currency = currency.USD, default_qty_type = strategy.fixed, default_qty_value = 1, calc_on_every_tick = false, process_orders_on_close = false, max_boxes_count = 200, max_lines_count = 300, max_labels_count = 300)
 
-// ── inputs ───────────────────────────────────────────────────────────────────
+// -- inputs -------------------------------------------------------------------
 grpS = "Setup"
 lookbackCandles = input.int(4,    "15m candles forming the pool", minval=1, maxval=20, group=grpS)
 minPen          = input.float(0.25,"Minimum penetration (points)", minval=0.0, step=0.25, group=grpS)
@@ -74,7 +64,7 @@ alertTemplate = input.string(
      "Alert JSON template", group=grpA,
      tooltip="Placeholders: {0} action  {1} symbol  {2} qty  {3} entry  {4} stop  {5} target  {6} risk points  {7} ISO time")
 
-// ── session state ────────────────────────────────────────────────────────────
+// -- session state ------------------------------------------------------------
 inSweepWin = not na(time(timeframe.period, sweepWindow,  tz))
 inEntryWin = not na(time(timeframe.period, entryWindow,  tz))
 inSession  = not na(time(timeframe.period, tradeSession, tz))
@@ -84,17 +74,17 @@ sessionEnd  = not inSession and inSession[1]
 var int barsSinceOpen = 0
 barsSinceOpen := sessionOpen ? 1 : inSession ? barsSinceOpen + 1 : 0
 
-// ── 15-minute liquidity pool (non-repainting) ────────────────────────────────
+// -- 15-minute liquidity pool (non-repainting) --------------------------------
 // The [1] offset and lookahead_on are interdependent: together they return the
 // last CLOSED 15m bar's value. Removing either reintroduces lookahead bias.
 // During the forming 15m bar t this yields highest(high,4) as of bar t-1, i.e.
-// the extreme of candles t-4..t-1 — the same as rolling(4).max().shift(1).
+// the extreme of candles t-4..t-1 -- the same as rolling(4).max().shift(1).
 poolHigh = request.security(syminfo.tickerid, "15", ta.highest(high, lookbackCandles)[1], lookahead = barmerge.lookahead_on)
 poolLow  = request.security(syminfo.tickerid, "15", ta.lowest(low,   lookbackCandles)[1], lookahead = barmerge.lookahead_on)
 
-// ── swing pivots and the CHoCH state machine ─────────────────────────────────
+// -- swing pivots and the CHoCH state machine ---------------------------------
 // ta.pivothigh(len,len) is non-na on the bar that CONFIRMS a pivot len bars
-// back — the same confirmation delay as bar_index + n in the Python.
+// back -- the same confirmation delay as bar_index + n in the Python.
 ph = ta.pivothigh(high, pivotLen, pivotLen)
 pl = ta.pivotlow(low,   pivotLen, pivotLen)
 
@@ -131,7 +121,7 @@ if pivotReady and not na(ph)
 if pivotReady and not na(pl)
     pendLow := pl
 
-// ── fair value gaps (3 bars, confirmed on the third) ─────────────────────────
+// -- fair value gaps (3 bars, confirmed on the third) -------------------------
 fvgReady   = barsSinceOpen > 3
 bullFvg    = fvgReady and low > high[2] and (low - high[2]) >= minFvgSize
 bearFvg    = fvgReady and high < low[2] and (low[2] - high) >= minFvgSize
@@ -140,7 +130,7 @@ bullFvgBot = high[2]
 bearFvgTop = low[2]
 bearFvgBot = high
 
-// ── setup state machine ──────────────────────────────────────────────────────
+// -- setup state machine ------------------------------------------------------
 var int    stage      = 0     // 0 waiting, 1 swept, 2 order working
 var int    setupDir   = 0     // +1 long, -1 short
 var float  sweptLevel = na
@@ -209,7 +199,7 @@ if expired
 
 confirmed = afterSweep and not na(fvgTop) and ((setupDir == 1 and bullChoch) or (setupDir == -1 and bearChoch))
 
-// ── price the trade ──────────────────────────────────────────────────────────
+// -- price the trade ----------------------------------------------------------
 if confirmed
     e = (fvgTop + fvgBot) / 2.0
     s = setupDir == 1 ? protective - stopBuffer : protective + stopBuffer
@@ -228,7 +218,7 @@ if confirmed
         stage    := 0
         setupDir := 0
 
-// ── orders ───────────────────────────────────────────────────────────────────
+// -- orders -------------------------------------------------------------------
 isoTime  = str.format_time(time, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC")
 msg(action, q, e, s, t, rp) =>
     str.format(alertTemplate, action, syminfo.ticker, q,
@@ -272,7 +262,7 @@ if strategy.position_size == 0 and strategy.position_size[1] != 0
     stage := 0
     setupDir := 0
 
-// ── visualisation ────────────────────────────────────────────────────────────
+// -- visualisation ------------------------------------------------------------
 poolBroken = stage >= 1
 plot(showPool and inSession and not na(poolHigh) ? poolHigh : na, "Pool high",
      color = poolBroken and setupDir == -1 ? color.new(color.red, 20) : color.new(#4a3aa7, 35),
@@ -306,13 +296,13 @@ plot(showLevels and strategy.position_size != 0 and not na(stopPx) ? stopPx : na
 plot(showLevels and strategy.position_size != 0 and not na(targetPx) ? targetPx : na, "Target",
      color.new(#15734a, 0), style = plot.style_linebr, linewidth = 1)
 
-// ── status table ─────────────────────────────────────────────────────────────
+// -- status table -------------------------------------------------------------
 var table info = table.new(position.top_right, 2, 7,
      bgcolor = color.new(color.black, 20), border_width = 1)
 if showTable and barstate.islast
     state = strategy.position_size != 0 ? "IN TRADE"
              : stage == 2 ? "order working"
-             : stage == 1 ? "swept · awaiting CHoCH"
+             : stage == 1 ? "swept - awaiting CHoCH"
              : tradedToday ? "done for today" : "waiting"
     table.cell(info, 0, 0, "LTF Sweep", text_color = color.white, text_size = size.small)
     table.cell(info, 1, 0, state, text_color = color.yellow, text_size = size.small)
@@ -322,16 +312,16 @@ if showTable and barstate.islast
          : str.tostring(poolHigh, format.mintick) + " / " + str.tostring(poolLow, format.mintick),
          text_color = color.white, text_size = size.tiny)
     table.cell(info, 0, 2, "direction", text_color = color.gray, text_size = size.tiny)
-    table.cell(info, 1, 2, setupDir == 1 ? "LONG" : setupDir == -1 ? "SHORT" : "—",
+    table.cell(info, 1, 2, setupDir == 1 ? "LONG" : setupDir == -1 ? "SHORT" : "-",
          text_color = setupDir == 1 ? color.lime : setupDir == -1 ? color.red : color.gray, text_size = size.tiny)
     table.cell(info, 0, 3, "entry", text_color = color.gray, text_size = size.tiny)
-    table.cell(info, 1, 3, na(entryPx) ? "—" : str.tostring(entryPx, format.mintick),
+    table.cell(info, 1, 3, na(entryPx) ? "-" : str.tostring(entryPx, format.mintick),
          text_color = color.white, text_size = size.tiny)
     table.cell(info, 0, 4, "stop / target", text_color = color.gray, text_size = size.tiny)
-    table.cell(info, 1, 4, na(stopPx) ? "—" : str.tostring(stopPx, format.mintick) + " / " + str.tostring(targetPx, format.mintick),
+    table.cell(info, 1, 4, na(stopPx) ? "-" : str.tostring(stopPx, format.mintick) + " / " + str.tostring(targetPx, format.mintick),
          text_color = color.white, text_size = size.tiny)
     table.cell(info, 0, 5, "risk / qty", text_color = color.gray, text_size = size.tiny)
-    table.cell(info, 1, 5, str.tostring(riskPts, "#.##") + " pts · " + str.tostring(qty) + " ct",
+    table.cell(info, 1, 5, str.tostring(riskPts, "#.##") + " pts - " + str.tostring(qty) + " ct",
          text_color = color.white, text_size = size.tiny)
     table.cell(info, 0, 6, "risk $", text_color = color.gray, text_size = size.tiny)
     table.cell(info, 1, 6, "$" + str.tostring(riskPts * pointValue * qty, "#"),

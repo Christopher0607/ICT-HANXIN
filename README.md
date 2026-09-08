@@ -8,7 +8,7 @@
 ```bash
 uv venv && uv pip install -e ".[dev]"
 uv run python scripts/ingest.py          # 合併原始 parquet + 驗證
-uv run pytest                            # 174 個測試
+uv run pytest                            #  個測試
 uv run python scripts/compare_strategies.py --split      # 七套 + 組合帳戶
 uv run python scripts/compare_strategies.py --hindsight-bars 1   # 前視敏感度
 ```
@@ -188,7 +188,7 @@ strategies/     base.py (共用機制) · registry.py (七套預先登記)
                 breaker_retest · ote_retracement · sfp_reversal
 backtest/       engine.py (1 分鐘解析 + 固定風險部位) · metrics.py
                 controls.py (隨機方向 + best-of-N) · portfolio.py
-tests/          174 個測試，含 test_no_lookahead.py 與
+tests/           個測試，含 test_no_lookahead.py 與
                 test_confirmation_timing.py（抓前一個測試抓不到的那類 bug）
 docs/           curriculum.md (40 堂課 + 30 策略) · glossary.md (術語→函式)
 ```
