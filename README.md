@@ -8,7 +8,7 @@
 ```bash
 uv venv && uv pip install -e ".[dev]"
 uv run python scripts/ingest.py          # 合併原始 parquet + 驗證
-uv run pytest                            # 155 個測試
+uv run pytest                            # 174 個測試
 uv run python scripts/compare_strategies.py --split      # 七套 + 組合帳戶
 uv run python scripts/compare_strategies.py --hindsight-bars 1   # 前視敏感度
 ```
@@ -188,7 +188,7 @@ strategies/     base.py (共用機制) · registry.py (七套預先登記)
                 breaker_retest · ote_retracement · sfp_reversal
 backtest/       engine.py (1 分鐘解析 + 固定風險部位) · metrics.py
                 controls.py (隨機方向 + best-of-N) · portfolio.py
-tests/          155 個測試，含 test_no_lookahead.py 與
+tests/          174 個測試，含 test_no_lookahead.py 與
                 test_confirmation_timing.py（抓前一個測試抓不到的那類 bug）
 docs/           curriculum.md (40 堂課 + 30 策略) · glossary.md (術語→函式)
 ```
@@ -204,6 +204,8 @@ docs/           curriculum.md (40 堂課 + 30 策略) · glossary.md (術語→�
 - **[docs/po3_explainer.html](docs/po3_explainer.html)** — PO3 策略逐步拆解，
   用回測裡兩筆真實交易的實際 K 棒
   （[線上版](https://claude.ai/code/artifact/a5f37fe5-2994-4194-b41a-3370bcfdaffc)）。
+- **[tradingview/](tradingview/)** — Pine Script v6 實作（strategy + indicator）、
+  參數對照表、警報與 webhook 設定、逐筆比對流程。
 - **[docs/ltf_explainer.html](docs/ltf_explainer.html)** — LTF 掃針策略拆解、
   近 3/6 個月回測、滾動視窗檢定，含可拖曳縮放的權益曲線
   （[線上版](https://claude.ai/code/artifact/aaa435df-c169-4646-9b25-2ba5056ee957)）。
