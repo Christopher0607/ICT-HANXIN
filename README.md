@@ -162,6 +162,24 @@ sfp_reversal 有 1,761 筆，隨機化後前者虧最少，「七套最大值」
 它們發訊號較晚，永遠被搶先，而搶先的正是虧最多的那幾套。
 「最早訊號優先」本身就是一條很差的選擇規則。
 
+## 接 prop firm
+
+`tradingview/README.md` 有完整說明，三個部分：
+
+| 元件 | 做什麼 |
+|---|---|
+| Pine 的 `propMode` | 圖表上強制帳戶規則，預設關閉 |
+| `bridge/` | TradingView webhook → TopstepX 下單，**預設 dry-run** |
+| `scripts/forward_log.py` | 每次拉新資料就往前瞻記錄追加一筆 |
+
+**先讀 `bridge/README.md` 最上面那段**：Topstep 在 funded 帳戶禁止 API 自動交易、
+也禁用 VPS，付錢之前要跟客服拿書面確認。
+
+規則守衛在兩個地方各實作一次（Pine 一份、`bridge/guards.py` 一份），
+因為圖表不是可信的關卡 —— 可能沒重新載入、input 可能被改、webhook 可能被重放。
+`tests/test_bridge.py` 會把 Pine 原始碼裡的數字讀出來和 Python 那份比對，
+改了一邊沒改另一邊測試就會紅。
+
 ## 資料
 
 `data/raw/` 是你用 Databento API 拉的原始資料（詳見 `docs/DATABENTO_README.md`）。
