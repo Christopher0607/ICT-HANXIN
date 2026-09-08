@@ -56,6 +56,44 @@ alertTemplate = input.string(
      "Alert JSON template", group=grpA,
      tooltip="Tokens replaced verbatim: %ACTION% %SYMBOL% %QTY% %ENTRY% %STOP% %TARGET% %RISKPTS% %TIME%")
 
+grpP = "Prop firm"
+propMode     = input.bool(false, "Enforce prop firm rules", group=grpP,
+     tooltip="Off by default. With it off nothing below changes a single order.")
+firmPreset   = input.string("Topstep 50K", "Account", group=grpP,
+     options=["Topstep 50K", "Topstep 100K", "Topstep 150K", "Apex 50K EOD", "Apex 100K EOD", "Custom"],
+     tooltip="Topstep figures are from Topstep's own rule pages. The Apex rows came from third-party summaries after the 4.0 change and are NOT verified -- check them against Apex before trusting them, or use Custom.")
+accountStart = input.float(50000, "Account starting balance", minval=1, group=grpP)
+riskPctOfMLL = input.float(10, "Risk per trade, % of the loss limit", minval=1, maxval=50, group=grpP,
+     tooltip="Replaces the Risk-per-trade dollar figure while prop mode is on. 10% of a $2,000 limit is $200, which is where the pass rate peaked in testing: below it too many setups cannot afford one contract, above it the drawdown eats the limit.")
+safetyMult   = input.float(1.5, "Refuse to open within N x risk of the limit", minval=1.0, step=0.25, group=grpP)
+cTarget      = input.float(3000, "Custom: profit target",       group=grpP)
+cMaxLoss     = input.float(2000, "Custom: maximum loss limit",  group=grpP)
+cDailyLoss   = input.float(1000, "Custom: daily loss limit",    group=grpP)
+cMaxMicros   = input.int(50,     "Custom: max micro contracts", group=grpP)
+
+// Preset table. Columns: profit target, max loss limit, daily loss limit,
+// max micros. Apex has no daily loss limit, so its cell is effectively
+// infinite rather than zero -- a zero there would block every trade.
+var int pIdx = array.indexof(array.from("Topstep 50K", "Topstep 100K", "Topstep 150K", "Apex 50K EOD", "Apex 100K EOD"), firmPreset)
+var float profitTarget   = pIdx < 0 ? cTarget    : array.get(array.from(3000., 6000., 9000., 3000., 6000.), pIdx)
+var float maxLossLimit   = pIdx < 0 ? cMaxLoss   : array.get(array.from(2000., 3000., 4500., 2500., 3000.), pIdx)
+var float dailyLossLimit = pIdx < 0 ? cDailyLoss : array.get(array.from(1000., 2000., 3000., 1e9, 1e9), pIdx)
+var int   maxMicros      = pIdx < 0 ? cMaxMicros : int(array.get(array.from(50., 100., 150., 20., 40.), pIdx))
+
+// Sizing while prop mode is on comes from the loss limit, not the dollar box:
+// a fixed $500 produced a $9,615 drawdown out of sample, nearly five times a
+// $2,000 limit. Deriving it from the limit rescales automatically per account.
+effRisk = propMode ? maxLossLimit * riskPctOfMLL / 100.0 : riskUSD
+
+// Why a trade must not be opened, or 0 to go ahead. Kept as one pure function
+// in the shared core so the strategy and the indicator cannot drift apart on
+// the rule; only the equity they feed it differs.
+propBlock(liveEq, floorEq, dayPnl, netP, plannedRisk) =>
+    not propMode ? 0 :
+         liveEq - floorEq < plannedRisk * safetyMult ? 1 :
+         dayPnl - plannedRisk <= -dailyLossLimit ? 2 :
+         netP >= profitTarget ? 3 : 0
+
 grpD = "Diagnostics"
 showDiag = input.bool(true, "Diagnostic counters in the table", group=grpD)
 debugLog = input.bool(true, "Trace to the Pine Logs tab",       group=grpD)
@@ -77,6 +115,16 @@ var int nConfirm     = 0
 var int nRejRisk     = 0
 var int nRejQty      = 0
 var int nArmed       = 0
+var int nBlockMLL    = 0
+var int nBlockDaily  = 0
+var int nBlockTgt    = 0
+var int nClampQty    = 0
+
+// Trailing loss floor and the session's opening equity. Both are maintained
+// in each script's own tail, because Pine functions cannot assign to globals
+// and the two scripts source their equity differently.
+var float mllFloor  = na
+var float dayOpenEq = na
 
 px(v) => str.tostring(v, format.mintick)
 
@@ -227,7 +275,12 @@ if confirmed
     ok = r >= minRiskPts and r <= maxRiskPts and (setupDir == 1 ? s < e : s > e)
     // Round down: taking one extra contract would breach the risk budget, and
     // a stop too wide to fit even one contract is skipped, not forced.
-    q = ok ? int(math.floor(riskUSD / (r * pointValue))) : 0
+    q0 = ok ? int(math.floor(effRisk / (r * pointValue))) : 0
+    // Over the contract ceiling the trade is cut down to fit, not skipped:
+    // a smaller position is still the setup, whereas skipping it is not.
+    q = propMode and q0 > maxMicros ? maxMicros : q0
+    if propMode and q0 > maxMicros
+        nClampQty += 1
     if ok and q >= 1
         entryPx  := e
         stopPx   := s
@@ -249,8 +302,8 @@ if confirmed
             nRejQty += 1
         if debugLog
             log.warning("rejected: risk " + str.tostring(r, "#.##") + " pts (band "
-                 + str.tostring(minRiskPts) + "-" + str.tostring(maxRiskPts) + "), qty "
-                 + str.tostring(q))
+                 + str.tostring(minRiskPts) + "-" + str.tostring(maxRiskPts) + "), budget $"
+                 + str.tostring(effRisk, "#") + ", qty " + str.tostring(q))
         stage    := 0
         setupDir := 0
 
@@ -259,6 +312,7 @@ if confirmed
 // so the script knows when to fire the exit alert and what to draw.
 var int posDir = 0
 var int nFilled = 0    // simulated fills, the indicator's stand-in for strategy.closedtrades
+var float simNet = 0.0 // realised P&L, the stand-in for strategy.netprofit
 
 isoTime = str.format_time(time, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC")
 riskPts = na(entryPx) or na(stopPx) ? 0.0 : math.abs(entryPx - stopPx)
@@ -284,6 +338,34 @@ msg(action, q, e, s, t, rp) =>
     m := str.replace_all(m, "%TIME%",    isoTime)
     m
 
+// -- prop firm accounting -----------------------------------------------------
+// Same rule as the strategy version, fed from the simulated ledger: this file
+// has no strategy.* accounting, so realised P&L is simNet and the open trade
+// is marked to the current close.
+openPnl    = posDir != 0 ? (close - entryPx) * posDir * pointValue * qty : 0.0
+propEquity = accountStart + simNet + openPnl
+if na(mllFloor)
+    mllFloor  := accountStart - maxLossLimit
+    dayOpenEq := accountStart
+if sessionOpen
+    dayOpenEq := propEquity
+if sessionEnd
+    // Trails the closing balance upward and never moves down.
+    mllFloor := math.max(mllFloor, accountStart + simNet - maxLossLimit)
+dayPnl      = propEquity - dayOpenEq
+plannedRisk = riskPts * pointValue * qty
+blockReason = propBlock(propEquity, mllFloor, dayPnl, simNet, plannedRisk)
+
+if stage == 2 and posDir == 0 and blockReason != 0
+    nBlockMLL   += blockReason == 1 ? 1 : 0
+    nBlockDaily += blockReason == 2 ? 1 : 0
+    nBlockTgt   += blockReason == 3 ? 1 : 0
+    if debugLog
+        log.warning("BLOCKED (" + (blockReason == 1 ? "loss limit" : blockReason == 2 ? "daily cap" : "target made")
+             + ") room $" + str.tostring(propEquity - mllFloor, "#") + ", risk $" + str.tostring(plannedRisk, "#"))
+    stage    := 0
+    setupDir := 0
+
 // Fill: price trades to the resting limit while the order window is open.
 fillLong  = stage == 2 and posDir == 0 and setupDir == 1  and low  <= entryPx and inEntryWin
 fillShort = stage == 2 and posDir == 0 and setupDir == -1 and high >= entryPx and inEntryWin
@@ -306,6 +388,7 @@ hitTarget = posDir != 0 and (posDir == 1 ? high >= targetPx : low  <= targetPx)
 if hitStop or hitTarget
     alert(msg(hitStop ? "exit_stop" : "exit_target", qty, entryPx, stopPx, targetPx, riskPts),
          alert.freq_once_per_bar_close)
+    simNet   += ((hitStop ? stopPx : targetPx) - entryPx) * posDir * pointValue * qty
     posDir   := 0
     stage    := 0
     setupDir := 0
@@ -320,6 +403,7 @@ if sessionEnd
     if posDir != 0
         alert(msg("close", qty, entryPx, stopPx, targetPx, riskPts),
              alert.freq_once_per_bar_close)
+        simNet += (close - entryPx) * posDir * pointValue * qty
     posDir   := 0
     stage    := 0
     setupDir := 0
@@ -365,7 +449,7 @@ plot(showLevels and posDir != 0 and not na(targetPx) ? targetPx : na, "Target",
 // -- status table -------------------------------------------------------------
 // One helper for every row: the styling was repeated twenty times, which is
 // both noise to read and bytes in a file that has to survive a clipboard.
-var table info = table.new(position.top_right, 2, 11,
+var table info = table.new(position.top_right, 2, 14,
      bgcolor = color.new(color.black, 20), border_width = 1)
 row(r, k, v, c) =>
     table.cell(info, 0, r, k, text_color = color.gray, text_size = size.tiny)
@@ -399,6 +483,19 @@ if showTable and barstate.islast
         row(9, "conf/armed/rej", str.tostring(nConfirm) + " / " + str.tostring(nArmed)
              + " / " + str.tostring(nRejRisk + nRejQty), nArmed > 0 ? color.white : color.red)
         row(10, "FILLED", str.tostring(filled), filled > 0 ? color.lime : color.red)
+    // -- prop firm ------------------------------------------------------------
+    // Only shown when the rules are on, so the panel stays short otherwise.
+    if propMode
+        room = propEquity - mllFloor
+        row(11, "loss limit", px(mllFloor) + "  room $" + str.tostring(room, "#"),
+             room > plannedRisk * safetyMult * 2 ? color.white : color.red)
+        row(12, "day / target", "$" + str.tostring(dayPnl, "#") + "  /  $"
+             + str.tostring(simNet, "#") + " of $" + str.tostring(profitTarget, "#"),
+             simNet >= profitTarget ? color.lime : color.white)
+        row(13, "blocked / clamped", str.tostring(nBlockMLL) + " limit, "
+             + str.tostring(nBlockDaily) + " daily, " + str.tostring(nBlockTgt)
+             + " done, " + str.tostring(nClampQty) + " cut",
+             nBlockMLL > 0 ? color.orange : color.gray)
 
 // -- wrong-timeframe warning --------------------------------------------------
 // Deliberately outside the table block: someone who turned the table off still

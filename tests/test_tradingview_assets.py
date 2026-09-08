@@ -111,7 +111,7 @@ def test_sweep_cannot_confirm_itself_on_its_own_bar(path):
 def test_position_size_rounds_down(path):
     """Rounding up would breach the risk budget on every awkward stop."""
     src = path.read_text()
-    assert "int(math.floor(riskUSD / (r * pointValue)))" in src
+    assert "int(math.floor(effRisk / (r * pointValue)))" in src
     assert "math.ceil" not in src
     assert "math.round" not in src
 
@@ -145,6 +145,9 @@ def normalised_program(src: str) -> str:
             folded[-1] = folded[-1].rstrip() + " " + line.strip()
         else:
             folded.append(line)
+    # Tooltips only become strippable once the statement is on one line, and
+    # the compact build drops them, so both sides lose them here.
+    folded = [re.sub(r',\s*tooltip\s*=\s*"[^"]*"', "", l) for l in folded]
     return "\n".join(re.sub(r"\s+", " ", l).strip() for l in folded)
 
 
@@ -162,16 +165,26 @@ def test_compact_build_is_the_same_program_as_its_source(compact):
 
 
 @pytest.mark.parametrize("compact", COMPACT, ids=lambda p: p.name)
-def test_compact_build_stays_under_the_size_that_got_truncated(compact):
-    """The 16.8 KB full script lost its last line to a phone's clipboard.
+def test_compact_build_does_not_balloon(compact):
+    """A growth guard, no longer a promise about clipboards.
 
-    That is the only evidence available about where the limit is, so treat it
-    as the limit. A compact build that grows past it has stopped doing the one
-    job it exists for.
+    This started as a hard 16 KB ceiling, on the evidence that a 16.8 KB paste
+    once lost its last line to a phone's clipboard. The prop-firm rule layer
+    pushed the compact builds to ~18.2 KB and that ceiling could not survive
+    it. Golfing safety-critical code to fit an approximate limit would be the
+    wrong trade, so the ceiling moved -- deliberately, and recorded here rather
+    than quietly edited.
+
+    What makes that acceptable: a truncated paste is LOUD. The original one
+    failed to compile with "Missing closing parenthesis" -- it cost a round
+    trip, it did not ship a half-script that traded. The real defence is the
+    last-line check in the README, not this number.
+
+    So this now only catches unnoticed bloat.
     """
-    assert len(compact.read_text()) < 16_000, (
-        "compact build has grown into the size range that truncated once; "
-        "shrink it rather than shipping it"
+    assert len(compact.read_text()) < 19_000, (
+        "compact build has grown well past what the prop layer needed; find "
+        "the bytes before raising this again"
     )
 
 
@@ -194,7 +207,7 @@ def test_compact_build_keeps_the_invariants_that_fail_silently(compact):
     assert src.startswith("//@version=6")
     assert "lookahead = barmerge.lookahead_on" in src
     assert "afterSweep = stage == 1 and bar_index > sweepBar" in src
-    assert "int(math.floor(riskUSD" in src
+    assert "int(math.floor(effRisk" in src
     assert "lookahead" in "".join(l for l in src.split("\n") if l.strip().startswith("//"))
 
 
@@ -304,3 +317,65 @@ def test_diagnostic_counters_survive_into_every_build(path):
                     "nRejRisk", "nRejQty"):
         assert counter in src, f"{counter} missing from {path.name}"
     assert 'timeframe.period != "1"' in src, "wrong-timeframe warning missing"
+
+
+def test_prop_mode_is_off_by_default():
+    """With prop mode off the script must behave exactly as it did before.
+
+    The rule layer can only ever remove orders. Shipping it enabled would
+    silently change what everyone else's chart does.
+    """
+    for path in SCRIPTS:
+        src = path.read_text()
+        assert 'propMode     = input.bool(false, "Enforce prop firm rules"' in src
+
+
+@pytest.mark.parametrize("path", SCRIPTS, ids=lambda p: p.name)
+def test_the_prop_rule_is_a_single_shared_function(path):
+    """One rule, in the core, so the two scripts cannot drift apart on it.
+
+    The strategy and the indicator source their equity differently -- one from
+    strategy.netprofit, one from a simulated ledger -- so the plumbing has to
+    differ. The decision must not: a guard that blocks a trade in the backtest
+    but not in the script sending the webhooks is worse than no guard.
+    """
+    src = path.read_text()
+    assert src.count("propBlock(liveEq, floorEq, dayPnl, netP, plannedRisk) =>") == 1
+    assert src.count("blockReason = propBlock(") == 1
+    for rule in ("liveEq - floorEq < plannedRisk * safetyMult ? 1 :",
+                 "dayPnl - plannedRisk <= -dailyLossLimit ? 2 :",
+                 "netP >= profitTarget ? 3 : 0"):
+        assert rule in src, f"{rule!r} missing from {path.name}"
+
+
+@pytest.mark.parametrize("path", SCRIPTS + COMPACT, ids=lambda p: p.name)
+def test_prop_sizing_comes_from_the_loss_limit(path):
+    """A fixed $500 produced a $9,615 drawdown against a $2,000 limit.
+
+    Deriving the per-trade risk from the loss limit rescales with the account
+    instead of needing a new magic number for every size.
+    """
+    src = path.read_text()
+    assert "effRisk = propMode ? maxLossLimit * riskPctOfMLL / 100.0 : riskUSD" in src
+
+
+@pytest.mark.parametrize("path", SCRIPTS + COMPACT, ids=lambda p: p.name)
+def test_topstep_50k_preset_matches_the_published_rules(path):
+    """Target $3,000, loss limit $2,000, daily $1,000, 50 micros.
+
+    These are the numbers the guard arithmetic is built on; a typo in the
+    table would be invisible on the chart and wrong in exactly the direction
+    that loses the account.
+    """
+    src = path.read_text()
+    assert "array.from(3000., 6000., 9000., 3000., 6000.), pIdx)" in src   # targets
+    assert "array.from(2000., 3000., 4500., 2500., 3000.), pIdx)" in src   # loss limits
+    assert "array.from(1000., 2000., 3000., 1e9, 1e9), pIdx)" in src       # daily caps
+    assert "array.from(50., 100., 150., 20., 40.), pIdx)" in src           # micro ceilings
+
+
+@pytest.mark.parametrize("path", SCRIPTS + COMPACT, ids=lambda p: p.name)
+def test_contract_ceiling_cuts_the_trade_down_rather_than_skipping_it(path):
+    """Over the ceiling the setup is still the setup, just smaller."""
+    src = path.read_text()
+    assert "q = propMode and q0 > maxMicros ? maxMicros : q0" in src

@@ -55,6 +55,20 @@ def join_continuations(lines: list[str]) -> list[str]:
     return out
 
 
+TOOLTIP = re.compile(r',\s*tooltip\s*=\s*"[^"]*"')
+
+
+def strip_tooltips(line: str) -> str:
+    """Drop input tooltips from the compact build.
+
+    A tooltip is prose for the settings dialog, the same kind of thing the
+    comments stripped above are, and the same kind of thing this build exists
+    to leave behind. Nothing reads them at runtime. Comment lines are left
+    alone -- the few that survive were kept deliberately.
+    """
+    return line if line.lstrip().startswith("//") else TOOLTIP.sub("", line)
+
+
 def compact(src: pathlib.Path) -> str:
     lines = src.read_text(encoding="ascii").split("\n")
     out = []
@@ -67,7 +81,8 @@ def compact(src: pathlib.Path) -> str:
         if not stripped and out and not out[-1].strip():
             continue  # collapse runs of blank lines
         out.append(line)
-    body = "\n".join(join_continuations(out)).lstrip("\n")
+    folded = join_continuations(out)
+    body = "\n".join(strip_tooltips(l) for l in folded).lstrip("\n")
     return HEADER.format(src=src.name) + body
 
 
