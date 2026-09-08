@@ -123,24 +123,44 @@ Pine Editor**，而那條路徑會把 UTF-8 搞壞。
 預設模板（`alertTemplate` input，可直接在設定面板改）：
 
 ```json
-{"strategy":"ltf_sweep","action":"{0}","symbol":"{1}","qty":{2},
- "entry":{3},"stop":{4},"target":{5},"risk_points":{6},"time":"{7}"}
+{"strategy":"ltf_sweep","action":"%ACTION%","symbol":"%SYMBOL%","qty":%QTY%,
+ "entry":%ENTRY%,"stop":%STOP%,"target":%TARGET%,"risk_points":%RISKPTS%,"time":"%TIME%"}
 ```
 
-| placeholder | 內容 | 範例 |
+| token | 內容 | 範例 |
 |---|---|---|
-| `{0}` | 動作 | `buy` / `sell` / `exit_stop` / `exit_target` / `close` |
-| `{1}` | 商品代碼 | `MNQ1!` |
-| `{2}` | 口數（已依風險算好） | `14` |
-| `{3}` | 進場價 | `30277.00` |
-| `{4}` | 停損價 | `30294.00` |
-| `{5}` | 停利價 | `30260.00` |
-| `{6}` | 風險點數 | `17.00` |
-| `{7}` | UTC ISO 時間 | `2026-05-28T15:23:00Z` |
+| `%ACTION%` | 動作 | `buy` / `sell` / `exit_stop` / `exit_target` / `close` |
+| `%SYMBOL%` | 商品代碼 | `MNQ1!` |
+| `%QTY%` | 口數（已依風險算好） | `14` |
+| `%ENTRY%` | 進場價 | `30277.00` |
+| `%STOP%` | 停損價 | `30294.00` |
+| `%TARGET%` | 停利價 | `30260.00` |
+| `%RISKPTS%` | 風險點數 | `17.00` |
+| `%TIME%` | UTC ISO 時間 | `2026-05-28T15:23:00Z` |
 
-換平台（TradersPost、自建服務等）只要改那一行模板，邏輯不用動。
-`strategy` 版的 `action` 只有 `buy`/`sell`/`exit`/`close`；
+換平台只要改模板那一行，邏輯不用動。
+`strategy` 版的 `%ACTION%` 是 `buy`/`sell`/`exit`/`close`；
 `indicator` 版會細分成 `exit_stop` / `exit_target`。
+
+### 為什麼用 `%TOKEN%` 而不是 `str.format`
+
+踩過的坑：`str.format()` 把 `{` `}` 當成佔位符界定符，
+所以 JSON 模板會在執行期炸掉：
+
+```
+Error on bar 2406: can't parse argument number: "strategy":"ltf_sweep"
+```
+
+而且 Pine 的執行期錯誤會**中止整個腳本** —— 圖表跟著全白，
+完全看不出是警報模板的問題。
+
+Pine 可以用單引號跳脫大括號（`'{'`），但那對之後要改模板的人是地雷：
+**漏一個引號，腳本就掛掉、圖表就空白**。
+改用 `str.replace_all` 做具名 token 替換，沒有任何跳脫規則要記。
+
+`tests/test_tradingview_assets.py` 會擋下 `str.format` 的回歸，
+也會驗證模板裡每個 token 都真的有對應的替換 ——
+少一個就會把字面的 `%TOKEN%` 送到券商去。
 
 ## 怎麼驗證移植是對的
 

@@ -52,9 +52,9 @@ showTable = input.bool(true, "Status table",        group=grpV)
 
 grpA = "Alerts"
 alertTemplate = input.string(
-     '{"strategy":"ltf_sweep","action":"{0}","symbol":"{1}","qty":{2},"entry":{3},"stop":{4},"target":{5},"risk_points":{6},"time":"{7}"}',
+     '{"strategy":"ltf_sweep","action":"%ACTION%","symbol":"%SYMBOL%","qty":%QTY%,"entry":%ENTRY%,"stop":%STOP%,"target":%TARGET%,"risk_points":%RISKPTS%,"time":"%TIME%"}',
      "Alert JSON template", group=grpA,
-     tooltip="Placeholders: {0} action  {1} symbol  {2} qty  {3} entry  {4} stop  {5} target  {6} risk points  {7} ISO time")
+     tooltip="Tokens replaced verbatim: %ACTION% %SYMBOL% %QTY% %ENTRY% %STOP% %TARGET% %RISKPTS% %TIME%")
 
 // -- session state ------------------------------------------------------------
 inSweepWin = not na(time(timeframe.period, sweepWindow,  tz))
@@ -218,10 +218,26 @@ var int posDir = 0
 isoTime = str.format_time(time, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC")
 riskPts = na(entryPx) or na(stopPx) ? 0.0 : math.abs(entryPx - stopPx)
 
+// Built with str.replace_all, deliberately not str.format: that function reads
+// { and } as placeholder delimiters, so a JSON template makes it fail at
+// runtime with "can't parse argument number". Escaping braces with single
+// quotes works but leaves a trap for anyone editing the template later -- one
+// missed quote halts the script and blanks the chart. Plain token substitution
+// has no escaping rules at all.
 msg(action, q, e, s, t, rp) =>
-    str.format(alertTemplate, action, syminfo.ticker, q,
-               str.tostring(e, format.mintick), str.tostring(s, format.mintick),
-               str.tostring(t, format.mintick), str.tostring(rp, "#.##"), isoTime)
+    // %QTY% goes first on purpose: str.tostring of a series int yields a series
+    // string, so m is a series from its first assignment. Seeding m with the
+    // input template instead would type it as simple and the next assignment
+    // would not fit.
+    m = str.replace_all(alertTemplate, "%QTY%", str.tostring(q))
+    m := str.replace_all(m, "%ACTION%",  action)
+    m := str.replace_all(m, "%SYMBOL%",  syminfo.ticker)
+    m := str.replace_all(m, "%ENTRY%",   str.tostring(e, format.mintick))
+    m := str.replace_all(m, "%STOP%",    str.tostring(s, format.mintick))
+    m := str.replace_all(m, "%TARGET%",  str.tostring(t, format.mintick))
+    m := str.replace_all(m, "%RISKPTS%", str.tostring(rp, "#.##"))
+    m := str.replace_all(m, "%TIME%",    isoTime)
+    m
 
 // Fill: price trades to the resting limit while the order window is open.
 fillLong  = stage == 2 and posDir == 0 and setupDir == 1  and low  <= entryPx and inEntryWin

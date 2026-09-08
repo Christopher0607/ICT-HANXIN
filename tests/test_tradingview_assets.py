@@ -163,3 +163,49 @@ def test_compact_build_keeps_the_invariants_that_fail_silently(compact):
     assert "afterSweep = stage == 1 and bar_index > sweepBar" in src
     assert "int(math.floor(riskUSD" in src
     assert "lookahead" in "".join(l for l in src.split("\n") if l.strip().startswith("//"))
+
+
+@pytest.mark.parametrize("path", SCRIPTS, ids=lambda p: p.name)
+def test_alert_message_is_not_built_with_str_format(path):
+    """str.format reads { and } as placeholders, so a JSON template breaks it.
+
+    It failed at runtime with "can't parse argument number" on the first bar
+    that produced a signal, and a Pine runtime error halts the script -- so the
+    chart also went blank, which gives no hint that the alert template was the
+    cause. Escaping braces with single quotes is legal but leaves the same trap
+    for anyone editing the template to suit their broker.
+    """
+    src = path.read_text()
+    assert "str.format(" not in src, (
+        "build the alert message with str.replace_all; str.format cannot take a "
+        "JSON template without brace escaping"
+    )
+    assert "str.replace_all(" in src
+
+
+@pytest.mark.parametrize("path", SCRIPTS, ids=lambda p: p.name)
+def test_every_alert_token_is_actually_substituted(path):
+    """A token left in the template ships the literal %TOKEN% to the broker."""
+    src = path.read_text()
+    template = re.search(r"'(\{\"strategy\".*?\})'", src)
+    assert template, "default alert template not found"
+    in_template = set(re.findall(r"%[A-Z]+%", template.group(1)))
+    replaced = set(re.findall(r'str\.replace_all\([^,]+,\s*"(%[A-Z]+%)"', src))
+    assert in_template == replaced, (
+        f"template tokens {sorted(in_template)} do not match the substitutions "
+        f"{sorted(replaced)}"
+    )
+    assert in_template, "template has no tokens at all"
+
+
+@pytest.mark.parametrize("path", SCRIPTS, ids=lambda p: p.name)
+def test_message_variable_starts_from_a_series_assignment(path):
+    """Pine types a variable on first assignment; seeding from the input is simple.
+
+    Assigning the series result of a later str.replace_all into a variable first
+    typed as simple is a compile error, so the substitution that is certainly a
+    series has to come first.
+    """
+    src = path.read_text()
+    assert 'm = str.replace_all(alertTemplate, "%QTY%", str.tostring(q))' in src
+    assert "m = alertTemplate\n" not in src
