@@ -35,7 +35,7 @@ TV 當即時訊號引擎用，不要當驗證工具。
 | 損益報表 | 有 | 無 |
 | 成交判定 | TradingView 的模擬器決定 | 腳本自己判定，可控 |
 
-邏輯核心兩份**逐字元相同**（189 行），只有結尾的下單/發警報不同。
+邏輯核心兩份**逐字元相同**（232 行），只有結尾的下單/發警報不同。
 先用 strategy 版確認訊號長得對，再換 indicator 版接自動化。
 
 ## 腳本刻意維持純 ASCII
@@ -61,13 +61,16 @@ Pine Editor**，而那條路徑會把 UTF-8 搞壞。
 
 | 檔案 | 大小 | 用途 |
 |---|---|---|
-| `ltf_sweep_strategy.pine` | 15.8 KB | 完整版，桌機用、看註解 |
-| `ltf_sweep_strategy_compact.pine` | 12.8 KB | **手機貼這個** |
-| `ltf_sweep_indicator.pine` | 15.5 KB | 完整版 |
-| `ltf_sweep_indicator_compact.pine` | 12.5 KB | **手機貼這個** |
+| `ltf_sweep_strategy.pine` | 21.4 KB | 完整版，桌機用、看註解 |
+| `ltf_sweep_strategy_compact.pine` | 14.6 KB | **手機貼這個** |
+| `ltf_sweep_indicator.pine` | 20.0 KB | 完整版 |
+| `ltf_sweep_indicator_compact.pine` | 14.4 KB | **手機貼這個** |
 
-精簡版由 `scripts/make_compact_pine.py` 產生，
-`tests/test_tradingview_assets.py` 會驗證兩者的程式碼逐行一致 ——
+精簡版由 `scripts/make_compact_pine.py` 產生：拿掉說明性註解，
+並把換行的續行折回單行（Pine 自己的規則是「續行的縮排不是 4 的倍數」，
+所以折得回去）。`tests/test_tradingview_assets.py` 會驗證精簡版和本體
+**是同一支程式**（正規化後逐 token 相同），另外擋住精簡版膨脹回
+16 KB 以上 —— 那是曾經被截斷過的尺寸。
 改了本體忘記重新產生，測試就會失敗。
 
 **貼完務必檢查最後一行是不是完整的** `text_color = color.white, text_size = size.tiny)`。
@@ -75,8 +78,43 @@ Pine Editor**，而那條路徑會把 UTF-8 搞壞。
 ## 安裝
 
 1. TradingView → Pine Editor → 貼上 → Save → Add to chart
-2. 圖表設成 **MNQ1!、1 分鐘**
+2. 圖表設成 **MNQ1!、1 分鐘**（**必須是 1 分鐘**，見下面的疑難排解）
 3. 圖表時區建議設 `America/New_York`（腳本內部自己換算，不設也不影響邏輯）
+4. 加上去之後看右上角的診斷面板 —— 它會告訴你腳本實際看到了什麼
+
+## 疑難排解：圖上有畫東西，但 Strategy Tester 一筆成交都沒有
+
+這個症狀踩過，原因不只一個，而且**全部長得一模一樣**：
+圖照畫、不報錯、成交表全空。所以腳本自己會數，右上角面板的四行診斷是：
+
+| 面板那行 | 意思 | 這行是 0 代表 |
+|---|---|---|
+| `chart` | 商品 + 圖表週期 | 顯示 `NEEDS 1` → **圖表不是 1 分鐘** |
+| `sess/swp/chc` | session 內 K 棒 / 掃針次數 / CHoCH 次數 | 第一格 0 → session 或時區不對；第二格 0 → 池子沒被掃到 |
+| `conf/armed/rej` | 確認 / 下單 / 被風控擋掉 | 中間 0 而前面不是 0 → 訊號成立但算不出口數 |
+| `FILLED` | 實際成交筆數 | **`armed` 不是 0 但這裡是 0 → 券商模擬器在丟單** |
+
+打開 `debugLog` 之後，Pine Logs 分頁會有逐筆時間軸（掃針 → 下單 → 成交 → 出場），
+比面板更細。
+
+### 最容易中的兩個
+
+**一、圖表週期不是 1 分鐘。**
+這個模型是「15 分鐘的池子，被一根 1 分鐘 K 掃掉，再由 1 分鐘 CHoCH 確認」。
+在 5 分鐘或 15 分鐘圖上那個結構根本不存在，一個 session 內幾乎跑不完 ——
+**零成交是預期結果，不是 bug**。腳本現在會在圖上畫紅色警告。
+
+**二、保證金。**
+口數是**固定金額風險**算的：$500 ÷ 停損點數 ÷ $2。
+17 點的停損 = 14 口 MNQ ≈ **$840,000 名目**。
+初始資金 $25,000 配上任何非零的保證金要求，
+**每一張單都會因為資金不足被靜默拒絕**。
+所以 `strategy()` 裡現在明確寫死 `margin_long = 0, margin_short = 0`，
+初始資金也提到 $100,000。
+這兩個值**不影響任何訊號、口數或損益**，只是讓模擬器別擋單 ——
+不是為了讓數字好看調的參數。
+
+如果你自己改了 Properties 分頁裡的 Margin 欄位，記得改回 0。
 
 ## 參數對照表
 
@@ -98,6 +136,9 @@ Pine Editor**，而那條路徑會把 UTF-8 搞壞。
 | `sweepWindow` Sweeps accepted | `session_start` – `session_end` | 0930-1500 |
 | `entryWindow` Limit order live | `entry_deadline` | 0930-1530 |
 | `tradeSession` Session / flat by | `exit_minute` | 0930-1600 |
+
+`showDiag`（診斷計數器）和 `debugLog`（Pine Logs 追蹤）也沒有對應欄位，
+兩者純粹是排查用的，不影響任何訊號。確認一切正常之後可以把 `debugLog` 關掉。
 
 `tz` 和 `showPool` / `showFvg` / `showLevels` / `showTable` 沒有對應欄位 ——
 前者是時區（預設 `America/New_York`，對應 Python 的 `zoneinfo` 換算），
@@ -164,12 +205,28 @@ Pine 可以用單引號跳脫大括號（`'{'`），但那對之後要改模板�
 
 ## 怎麼驗證移植是對的
 
-`docs/ltf_signals_recent.csv` 是 Python 回測近三個月的每一筆訊號
-（67 筆、55 筆成交）。重現方式：
+`docs/ltf_signals_recent.csv` 是 Python 回測近四個月的每一筆訊號
+（2026-05-08 → 2026-09-07，87 筆、73 筆成交），
+每筆都有**到分鐘**的掃針與 CHoCH 時間。重現方式：
 
 ```bash
-uv run python scripts/export_signals.py --months 3
+uv run python scripts/export_signals.py --months 4
 ```
+
+最近幾筆長這樣，可以直接拿去 TV 上拉到那一分鐘對：
+
+| date | sweep_et | choch_et | side | entry | stop | target | 結果 |
+|---|---|---|---|---|---|---|---|
+| 2026-08-31 | 09:35 | 10:03 | SHORT | 29428.25 | 29480.00 | 29376.50 | target |
+| 2026-09-01 | 09:50 | 09:57 | SHORT | 29127.88 | 29159.00 | 29096.75 | target |
+| 2026-09-02 | 09:42 | 09:50 | SHORT | 29100.50 | 29120.00 | 29081.00 | target |
+| 2026-09-03 | 11:20 | 11:38 | SHORT | 29466.38 | 29543.50 | 29389.25 | stop |
+| 2026-09-04 | 09:48 | 10:08 | SHORT | 29672.25 | 29692.75 | 29651.75 | 未成交 |
+| 2026-09-07 | 09:35 | 09:58 | SHORT | 29620.12 | 29632.50 | 29607.75 | stop |
+
+**近 13 個交易日（08-10 → 08-28）研究版是 15 個訊號、12 筆成交。**
+1 分鐘圖上的 Strategy Tester 應該落在這個量級 ——
+成交是 0 或個位數，就是設定有問題，不是模型安靜。
 
 步驟：
 

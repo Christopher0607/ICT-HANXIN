@@ -130,16 +130,49 @@ def test_the_two_scripts_share_one_core_verbatim():
     assert len(core_s.strip().split("\n")) > 150, "core looks truncated"
 
 
+def normalised_program(src: str) -> str:
+    """Code with comments gone, wrapped statements folded, spacing collapsed.
+
+    Compares what the two builds *do* rather than how they are laid out, so the
+    compact build is free to fold continuation lines to save bytes but not to
+    change a single token.
+    """
+    lines = code_lines(src)
+    folded: list[str] = []
+    for line in lines:
+        indent = len(line) - len(line.lstrip(" "))
+        if folded and indent % 4 != 0:
+            folded[-1] = folded[-1].rstrip() + " " + line.strip()
+        else:
+            folded.append(line)
+    return "\n".join(re.sub(r"\s+", " ", l).strip() for l in folded)
+
+
 @pytest.mark.parametrize("compact", COMPACT, ids=lambda p: p.name)
-def test_compact_build_matches_its_source_line_for_line(compact):
+def test_compact_build_is_the_same_program_as_its_source(compact):
     """The compact builds exist only to be smaller, never to be different.
 
     A mobile clipboard truncated a 17 KB paste one line from the end, so the
-    scripts also ship stripped of their prose. If the two ever diverge, the
-    one that gets pasted is no longer the one that was checked.
+    scripts also ship stripped of their prose and with wrapped statements
+    folded. If the two ever diverge, the one that gets pasted is no longer the
+    one that was checked.
     """
     full = compact.with_name(compact.name.replace("_compact", ""))
-    assert code_lines(full.read_text()) == code_lines(compact.read_text())
+    assert normalised_program(full.read_text()) == normalised_program(compact.read_text())
+
+
+@pytest.mark.parametrize("compact", COMPACT, ids=lambda p: p.name)
+def test_compact_build_stays_under_the_size_that_got_truncated(compact):
+    """The 16.8 KB full script lost its last line to a phone's clipboard.
+
+    That is the only evidence available about where the limit is, so treat it
+    as the limit. A compact build that grows past it has stopped doing the one
+    job it exists for.
+    """
+    assert len(compact.read_text()) < 16_000, (
+        "compact build has grown into the size range that truncated once; "
+        "shrink it rather than shipping it"
+    )
 
 
 @pytest.mark.parametrize("compact", COMPACT, ids=lambda p: p.name)
@@ -209,3 +242,65 @@ def test_message_variable_starts_from_a_series_assignment(path):
     src = path.read_text()
     assert 'm = str.replace_all(alertTemplate, "%QTY%", str.tostring(q))' in src
     assert "m = alertTemplate\n" not in src
+
+
+def block_under(src: str, header: str) -> str:
+    """The indented body following the line that starts with ``header``."""
+    lines = src.split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith(header):
+            body = []
+            for nxt in lines[i + 1:]:
+                if nxt.strip() and not nxt.startswith((" ", "\t")):
+                    break
+                body.append(nxt)
+            return "\n".join(body)
+    raise AssertionError(f"no line starts with {header!r}")
+
+
+def test_strategy_disables_the_emulator_funds_check():
+    """Fixed-dollar-risk sizing buys more notional than the account holds.
+
+    $500 of risk over a 17-point MNQ stop is 14 contracts, about $840,000 of
+    notional. Under any non-zero margin requirement TradingView's emulator
+    rejects every such order for insufficient funds, and it does it silently:
+    the chart still draws every sweep and CHoCH, and the Strategy Tester is
+    simply empty. Pinning margin to zero is what makes the backtest run at all.
+    """
+    src = (PINE_DIR / "ltf_sweep_strategy.pine").read_text()
+    decl = next(l for l in src.split("\n") if l.startswith("strategy("))
+    assert "margin_long = 0" in decl and "margin_short = 0" in decl, (
+        "margin must be pinned to 0 explicitly; the default is not ours to assume"
+    )
+    assert "initial_capital = 100000" in decl
+
+
+def test_exit_is_attached_before_the_entry_fills():
+    """A 1:1 stop is close enough that the fill bar can reach it.
+
+    Placing the exit only once ``strategy.position_size`` is non-zero leaves the
+    first bar of every trade unprotected, because the emulator fills the limit
+    intrabar but the script does not run again until that bar closes. The
+    research engine resolves the stop and the target on the fill bar, so the
+    exit has to be attached to the entry ID while it is still unfilled.
+    """
+    src = (PINE_DIR / "ltf_sweep_strategy.pine").read_text()
+    body = block_under(src, "if stage == 2 and strategy.position_size == 0")
+    assert "strategy.entry(" in body and 'strategy.exit("LTF x", "LTF"' in body, (
+        "the exit must be issued alongside the entry, not gated on position_size"
+    )
+    assert "if strategy.position_size != 0\n    strategy.exit" not in src
+
+
+@pytest.mark.parametrize("path", SCRIPTS + COMPACT, ids=lambda p: p.name)
+def test_diagnostic_counters_survive_into_every_build(path):
+    """"No signals" and "orders rejected" look identical on a chart.
+
+    They have opposite causes and opposite fixes, so the counters that tell
+    them apart have to reach the file that actually gets pasted.
+    """
+    src = path.read_text()
+    for counter in ("nBarsSession", "nSweep", "nChoch", "nConfirm", "nArmed",
+                    "nRejRisk", "nRejQty"):
+        assert counter in src, f"{counter} missing from {path.name}"
+    assert 'timeframe.period != "1"' in src, "wrong-timeframe warning missing"

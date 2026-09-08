@@ -36,10 +36,21 @@ showLevels= input.bool(true, "Entry / stop / target", group=grpV)
 showTable = input.bool(true, "Status table",        group=grpV)
 
 grpA = "Alerts"
-alertTemplate = input.string(
-     '{"strategy":"ltf_sweep","action":"%ACTION%","symbol":"%SYMBOL%","qty":%QTY%,"entry":%ENTRY%,"stop":%STOP%,"target":%TARGET%,"risk_points":%RISKPTS%,"time":"%TIME%"}',
-     "Alert JSON template", group=grpA,
-     tooltip="Tokens replaced verbatim: %ACTION% %SYMBOL% %QTY% %ENTRY% %STOP% %TARGET% %RISKPTS% %TIME%")
+alertTemplate = input.string( '{"strategy":"ltf_sweep","action":"%ACTION%","symbol":"%SYMBOL%","qty":%QTY%,"entry":%ENTRY%,"stop":%STOP%,"target":%TARGET%,"risk_points":%RISKPTS%,"time":"%TIME%"}', "Alert JSON template", group=grpA, tooltip="Tokens replaced verbatim: %ACTION% %SYMBOL% %QTY% %ENTRY% %STOP% %TARGET% %RISKPTS% %TIME%")
+
+grpD = "Diagnostics"
+showDiag = input.bool(true, "Diagnostic counters in the table", group=grpD)
+debugLog = input.bool(true, "Trace to the Pine Logs tab",       group=grpD)
+
+var int nBarsSession = 0
+var int nSweep       = 0
+var int nChoch       = 0
+var int nConfirm     = 0
+var int nRejRisk     = 0
+var int nRejQty      = 0
+var int nArmed       = 0
+
+px(v) => str.tostring(v, format.mintick)
 
 inSweepWin = not na(time(timeframe.period, sweepWindow,  tz))
 inEntryWin = not na(time(timeframe.period, entryWindow,  tz))
@@ -49,6 +60,8 @@ sessionEnd  = not inSession and inSession[1]
 
 var int barsSinceOpen = 0
 barsSinceOpen := sessionOpen ? 1 : inSession ? barsSinceOpen + 1 : 0
+if inSession
+    nBarsSession += 1
 
 // The [1] offset and lookahead_on are interdependent: together they return the
 // last CLOSED 15m bar's value. Removing either reintroduces lookahead bias.
@@ -74,6 +87,8 @@ bearBreak = inSession and not na(pendLow)  and close < pendLow
 bullChoch = bullBreak and trendDir < 0
 bearChoch = bearBreak and trendDir > 0
 brokenLevel = bullBreak ? pendHigh : bearBreak ? pendLow : na
+if bullChoch or bearChoch
+    nChoch += 1
 
 if bullBreak
     trendDir := 1
@@ -102,6 +117,7 @@ var float  protective = na    // furthest point reached against the trade
 var int    sweepBar   = 0
 var float  fvgTop     = na
 var float  fvgBot     = na
+var int    fvgBar     = 0     // bar the gap's third candle closed on
 var bool   tradedToday= false
 var float  entryPx    = na
 var float  stopPx     = na
@@ -125,22 +141,17 @@ if sessionOpen
 sweepHigh = inSweepWin and stage == 0 and not tradedToday and not na(poolHigh) and high > poolHigh + minPen and close < poolHigh
 sweepLow  = inSweepWin and stage == 0 and not tradedToday and not na(poolLow)  and low  < poolLow  - minPen and close > poolLow
 
-if sweepHigh
+if sweepHigh or sweepLow
     stage      := 1
-    setupDir   := -1
-    sweptLevel := poolHigh
-    protective := high
+    setupDir   := sweepHigh ? -1 : 1
+    sweptLevel := sweepHigh ? poolHigh : poolLow
+    protective := sweepHigh ? high : low
     sweepBar   := bar_index
     fvgTop     := na
     fvgBot     := na
-else if sweepLow
-    stage      := 1
-    setupDir   := 1
-    sweptLevel := poolLow
-    protective := low
-    sweepBar   := bar_index
-    fvgTop     := na
-    fvgBot     := na
+    nSweep     += 1
+    if debugLog
+        log.info("sweep " + (sweepHigh ? "HIGH " : "LOW ") + px(sweptLevel) + " -> awaiting " + (sweepHigh ? "bearish" : "bullish") + " CHoCH")
 
 // afterSweep enforces the research version's `confirmed_at > sweep_confirmed`:
 afterSweep = stage == 1 and bar_index > sweepBar
@@ -149,9 +160,11 @@ if stage == 1
     if afterSweep and setupDir == 1 and bullFvg
         fvgTop := bullFvgTop
         fvgBot := bullFvgBot
+        fvgBar := bar_index
     if afterSweep and setupDir == -1 and bearFvg
         fvgTop := bearFvgTop
         fvgBot := bearFvgBot
+        fvgBar := bar_index
 
 expired = stage == 1 and (bar_index - sweepBar) > confirmWithin
 if expired
@@ -161,6 +174,7 @@ if expired
 confirmed = afterSweep and not na(fvgTop) and ((setupDir == 1 and bullChoch) or (setupDir == -1 and bearChoch))
 
 if confirmed
+    nConfirm += 1
     e = (fvgTop + fvgBot) / 2.0
     s = setupDir == 1 ? protective - stopBuffer : protective + stopBuffer
     r = math.abs(e - s)
@@ -172,11 +186,21 @@ if confirmed
         targetPx := e + setupDir * targetR * r
         qty      := q
         stage    := 2
+        nArmed   += 1
+        if debugLog
+            log.info("armed " + (setupDir == 1 ? "LONG" : "SHORT") + "  entry " + px(e) + "  stop " + px(s) + "  target " + px(targetPx) + "  risk " + str.tostring(r, "#.##") + " pts  qty " + str.tostring(q))
     else
+        if not ok
+            nRejRisk += 1
+        else
+            nRejQty += 1
+        if debugLog
+            log.warning("rejected: risk " + str.tostring(r, "#.##") + " pts (band " + str.tostring(minRiskPts) + "-" + str.tostring(maxRiskPts) + "), qty " + str.tostring(q))
         stage    := 0
         setupDir := 0
 
 var int posDir = 0
+var int nFilled = 0    // simulated fills, the indicator's stand-in for strategy.closedtrades
 
 isoTime = str.format_time(time, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC")
 riskPts = na(entryPx) or na(stopPx) ? 0.0 : math.abs(entryPx - stopPx)
@@ -198,15 +222,16 @@ fillShort = stage == 2 and posDir == 0 and setupDir == -1 and high >= entryPx an
 if fillLong or fillShort
     posDir      := setupDir
     tradedToday := oneTradePerDay ? true : tradedToday
-    alert(msg(setupDir == 1 ? "buy" : "sell", qty, entryPx, stopPx, targetPx, riskPts),
-         alert.freq_once_per_bar_close)
+    nFilled     += 1
+    if debugLog
+        log.info("filled (simulated) " + (setupDir == 1 ? "LONG " : "SHORT ") + str.tostring(qty) + " @ " + px(entryPx))
+    alert(msg(setupDir == 1 ? "buy" : "sell", qty, entryPx, stopPx, targetPx, riskPts), alert.freq_once_per_bar_close)
 
 hitStop   = posDir != 0 and (posDir == 1 ? low  <= stopPx   : high >= stopPx)
 hitTarget = posDir != 0 and (posDir == 1 ? high >= targetPx : low  <= targetPx)
 
 if hitStop or hitTarget
-    alert(msg(hitStop ? "exit_stop" : "exit_target", qty, entryPx, stopPx, targetPx, riskPts),
-         alert.freq_once_per_bar_close)
+    alert(msg(hitStop ? "exit_stop" : "exit_target", qty, entryPx, stopPx, targetPx, riskPts), alert.freq_once_per_bar_close)
     posDir   := 0
     stage    := 0
     setupDir := 0
@@ -217,73 +242,56 @@ if stage == 2 and posDir == 0 and not inEntryWin
 
 if sessionEnd
     if posDir != 0
-        alert(msg("close", qty, entryPx, stopPx, targetPx, riskPts),
-             alert.freq_once_per_bar_close)
+        alert(msg("close", qty, entryPx, stopPx, targetPx, riskPts), alert.freq_once_per_bar_close)
     posDir   := 0
     stage    := 0
     setupDir := 0
 
 poolBroken = stage >= 1
-plot(showPool and inSession and not na(poolHigh) ? poolHigh : na, "Pool high",
-     color = poolBroken and setupDir == -1 ? color.new(color.red, 20) : color.new(#4a3aa7, 35),
-     style = plot.style_stepline, linewidth = 1)
-plot(showPool and inSession and not na(poolLow) ? poolLow : na, "Pool low",
-     color = poolBroken and setupDir == 1 ? color.new(color.green, 20) : color.new(#4a3aa7, 35),
-     style = plot.style_stepline, linewidth = 1)
+plot(showPool and inSession and not na(poolHigh) ? poolHigh : na, "Pool high", color = poolBroken and setupDir == -1 ? color.new(color.red, 20) : color.new(#4a3aa7, 35), style = plot.style_stepline, linewidth = 1)
+plot(showPool and inSession and not na(poolLow) ? poolLow : na, "Pool low", color = poolBroken and setupDir == 1 ? color.new(color.green, 20) : color.new(#4a3aa7, 35), style = plot.style_stepline, linewidth = 1)
 
 bgcolor(inSession ? color.new(color.blue, 96) : na, title = "Session")
 
-plotshape(sweepHigh, "Sweep high", shape.triangledown, location.abovebar,
-     color.new(color.red, 0), size = size.tiny)
-plotshape(sweepLow,  "Sweep low",  shape.triangleup,   location.belowbar,
-     color.new(color.green, 0), size = size.tiny)
-plotshape(confirmed and setupDir == 1,  "CHoCH up",   shape.diamond, location.belowbar,
-     color.new(#15734a, 0), size = size.tiny)
-plotshape(confirmed and setupDir == -1, "CHoCH down", shape.diamond, location.abovebar,
-     color.new(#c0322f, 0), size = size.tiny)
-plotshape(fillLong or fillShort, "Filled", shape.circle, location.absolute,
-     color.new(#1f4b8f, 0), size = size.tiny)
+plotshape(sweepHigh, "Sweep high", shape.triangledown, location.abovebar, color.new(color.red, 0), size = size.tiny)
+plotshape(sweepLow,  "Sweep low",  shape.triangleup,   location.belowbar, color.new(color.green, 0), size = size.tiny)
+plotshape(confirmed and setupDir == 1,  "CHoCH up",   shape.diamond, location.belowbar, color.new(#15734a, 0), size = size.tiny)
+plotshape(confirmed and setupDir == -1, "CHoCH down", shape.diamond, location.abovebar, color.new(#c0322f, 0), size = size.tiny)
+plotshape(fillLong or fillShort, "Filled", shape.circle, location.absolute, color.new(#1f4b8f, 0), size = size.tiny)
 
 if showFvg and confirmed
-    box.new(bar_index, fvgTop, bar_index + 20, fvgBot,
-         border_color = color.new(#eda100, 40), bgcolor = color.new(#eda100, 80))
+    box.new(fvgBar - 2, fvgTop, bar_index + 20, fvgBot, border_color = color.new(#eda100, 40), bgcolor = color.new(#eda100, 80))
     if not na(brokenLevel)
-        line.new(bar_index - 3, brokenLevel, bar_index + 8, brokenLevel,
-             color = color.new(#5a6572, 30), style = line.style_dotted)
+        line.new(bar_index - 3, brokenLevel, bar_index + 8, brokenLevel, color = color.new(#5a6572, 30), style = line.style_dotted)
 
-plot(showLevels and stage == 2 and not na(entryPx) ? entryPx : na, "Entry",
-     color.new(#1f4b8f, 0), style = plot.style_linebr, linewidth = 1)
-plot(showLevels and posDir != 0 and not na(stopPx) ? stopPx : na, "Stop",
-     color.new(#c0322f, 0), style = plot.style_linebr, linewidth = 1)
-plot(showLevels and posDir != 0 and not na(targetPx) ? targetPx : na, "Target",
-     color.new(#15734a, 0), style = plot.style_linebr, linewidth = 1)
+plot(showLevels and stage == 2 and not na(entryPx) ? entryPx : na, "Entry", color.new(#1f4b8f, 0), style = plot.style_linebr, linewidth = 1)
+plot(showLevels and posDir != 0 and not na(stopPx) ? stopPx : na, "Stop", color.new(#c0322f, 0), style = plot.style_linebr, linewidth = 1)
+plot(showLevels and posDir != 0 and not na(targetPx) ? targetPx : na, "Target", color.new(#15734a, 0), style = plot.style_linebr, linewidth = 1)
 
-var table info = table.new(position.top_right, 2, 7,
-     bgcolor = color.new(color.black, 20), border_width = 1)
+var table info = table.new(position.top_right, 2, 11, bgcolor = color.new(color.black, 20), border_width = 1)
+row(r, k, v, c) =>
+    table.cell(info, 0, r, k, text_color = color.gray, text_size = size.tiny)
+    table.cell(info, 1, r, v, text_color = c, text_size = size.tiny)
+
 if showTable and barstate.islast
-    state = posDir != 0 ? "IN TRADE (simulated)"
-             : stage == 2 ? "order working"
-             : stage == 1 ? "swept - awaiting CHoCH"
-             : tradedToday ? "done for today" : "waiting"
+    state = posDir != 0 ? "IN TRADE (simulated)" : stage == 2 ? "order working" : stage == 1 ? "swept - awaiting CHoCH" : tradedToday ? "done for today" : "waiting"
     table.cell(info, 0, 0, "LTF Sweep", text_color = color.white, text_size = size.small)
     table.cell(info, 1, 0, state, text_color = color.yellow, text_size = size.small)
-    table.cell(info, 0, 1, stage >= 1 ? "swept level" : "pool hi/lo",
-         text_color = color.gray, text_size = size.tiny)
-    table.cell(info, 1, 1, stage >= 1 and not na(sweptLevel) ? str.tostring(sweptLevel, format.mintick)
-         : str.tostring(poolHigh, format.mintick) + " / " + str.tostring(poolLow, format.mintick),
-         text_color = color.white, text_size = size.tiny)
-    table.cell(info, 0, 2, "direction", text_color = color.gray, text_size = size.tiny)
-    table.cell(info, 1, 2, setupDir == 1 ? "LONG" : setupDir == -1 ? "SHORT" : "-",
-         text_color = setupDir == 1 ? color.lime : setupDir == -1 ? color.red : color.gray, text_size = size.tiny)
-    table.cell(info, 0, 3, "entry", text_color = color.gray, text_size = size.tiny)
-    table.cell(info, 1, 3, na(entryPx) ? "-" : str.tostring(entryPx, format.mintick),
-         text_color = color.white, text_size = size.tiny)
-    table.cell(info, 0, 4, "stop / target", text_color = color.gray, text_size = size.tiny)
-    table.cell(info, 1, 4, na(stopPx) ? "-" : str.tostring(stopPx, format.mintick) + " / " + str.tostring(targetPx, format.mintick),
-         text_color = color.white, text_size = size.tiny)
-    table.cell(info, 0, 5, "risk / qty", text_color = color.gray, text_size = size.tiny)
-    table.cell(info, 1, 5, str.tostring(riskPts, "#.##") + " pts - " + str.tostring(qty) + " ct",
-         text_color = color.white, text_size = size.tiny)
-    table.cell(info, 0, 6, "risk $", text_color = color.gray, text_size = size.tiny)
-    table.cell(info, 1, 6, "$" + str.tostring(riskPts * pointValue * qty, "#"),
-         text_color = color.white, text_size = size.tiny)
+    row(1, stage >= 1 ? "swept level" : "pool hi/lo", stage >= 1 and not na(sweptLevel) ? px(sweptLevel) : px(poolHigh) + " / " + px(poolLow), color.white)
+    row(2, "direction", setupDir == 1 ? "LONG" : setupDir == -1 ? "SHORT" : "-", setupDir == 1 ? color.lime : setupDir == -1 ? color.red : color.gray)
+    row(3, "entry", na(entryPx) ? "-" : px(entryPx), color.white)
+    row(4, "stop / target", na(stopPx) ? "-" : px(stopPx) + " / " + px(targetPx), color.white)
+    row(5, "risk / qty", str.tostring(riskPts, "#.##") + " pts - " + str.tostring(qty) + " ct", color.white)
+    row(6, "risk $", "$" + str.tostring(riskPts * pointValue * qty, "#"), color.white)
+    if showDiag
+        tfOk = timeframe.period == "1"
+        filled = nFilled
+        row(7, "chart", syminfo.ticker + " tf=" + timeframe.period + (tfOk ? "" : " NEEDS 1"), tfOk ? color.white : color.red)
+        row(8, "sess/swp/chc", str.tostring(nBarsSession) + " / " + str.tostring(nSweep) + " / " + str.tostring(nChoch), nSweep > 0 ? color.white : color.red)
+        row(9, "conf/armed/rej", str.tostring(nConfirm) + " / " + str.tostring(nArmed) + " / " + str.tostring(nRejRisk + nRejQty), nArmed > 0 ? color.white : color.red)
+        row(10, "FILLED", str.tostring(filled), filled > 0 ? color.lime : color.red)
+
+var label tfWarn = na
+if barstate.islast and timeframe.period != "1"
+    label.delete(tfWarn)
+    tfWarn := label.new(bar_index, high, "LTF Sweep needs a 1-MINUTE chart -- this one is " + timeframe.period + ".\n" + "The model is a 15m pool swept by a 1m bar and confirmed by a 1m CHoCH.\n" + "That structure does not exist here, so no setup will ever complete.", color = color.new(color.red, 10), textcolor = color.white, style = label.style_label_down, size = size.normal)

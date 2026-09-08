@@ -11,6 +11,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+# Only scripts/fetch_databento.py needs this. Running the backtests off the
+# stored parquet files does not, so it stays out of the main dependency list.
+data = ["databento>=0.34"]
 
 [build-system]
 requires = ["hatchling"]

@@ -66,6 +66,10 @@ def main(argv=None) -> int:
     ap.add_argument("--json", default=None)
     ap.add_argument("--window-months", type=int, default=None,
                     help="score only the last N months instead of the split")
+    ap.add_argument("--start", default=None,
+                    help="score one explicit window: inclusive UTC date")
+    ap.add_argument("--end", default=None,
+                    help="score one explicit window: exclusive UTC date")
     ap.add_argument("--rolling", action="store_true",
                     help="score every 3- and 6-month window across the history")
     ap.add_argument("--export", default=None,
@@ -76,7 +80,7 @@ def main(argv=None) -> int:
     print("loading 1-minute data ...")
     df1 = D.load("1m")
 
-    if args.window_months or args.rolling or args.export:
+    if args.window_months or args.start or args.end or args.rolling or args.export:
         return _recent(df1, cfg, args)
 
     payload = {}
@@ -105,6 +109,23 @@ def main(argv=None) -> int:
 def _recent(df1, cfg, args) -> int:
     """Recent-window scoring, rolling-window context, and the report export."""
     end = df1.ts.max()
+
+    if args.start or args.end:
+        lo = pd.Timestamp(args.start, tz="UTC") if args.start else df1.ts.min()
+        hi = pd.Timestamp(args.end, tz="UTC") if args.end else end + pd.Timedelta("1min")
+        bars = df1[(df1.ts >= lo) & (df1.ts < hi)].reset_index(drop=True)
+        days = bars.trading_date.nunique() if len(bars) else 0
+        print(f"window {lo.date()} -> {hi.date()} (end exclusive)"
+              f"  {len(bars):,} bars, {days} trading days")
+        for cap, label in ((True, "one trade per day"), (False, "unrestricted")):
+            orders = generate_orders(bars, cfg, one_per_day=cap)
+            res = summarise(label, orders, bars, args.risk)
+            show(f"{lo.date()} -> {hi.date()}  ·  {label}",
+                 res["pessimistic"], res["optimistic"])
+            if cap and not res["pessimistic"].get("trades"):
+                continue
+            if cap:
+                _per_trade(res["pessimistic_trades"])
 
     if args.window_months:
         start = (end - pd.DateOffset(months=args.window_months)).normalize()
@@ -143,6 +164,24 @@ def _recent(df1, cfg, args) -> int:
     if args.export:
         _export(trades, df1, cfg, args)
     return 0
+
+
+def _per_trade(trades) -> None:
+    """List every trade. A window this small is read one trade at a time."""
+    filled = trades[trades["filled"]].sort_values("entry_ts")
+    if filled.empty:
+        return
+    print(f"\n  {'date':10} {'in':>5} {'out':>5} {'dir':>5} {'entry':>9} "
+          f"{'stop':>9} {'target':>9} {'ct':>3} {'R':>6} {'net $':>9}  why")
+    ny = "America/New_York"
+    for r in filled.itertuples():
+        print(f"  {pd.Timestamp(r.entry_ts).tz_convert(ny).strftime('%Y-%m-%d'):10} "
+              f"{pd.Timestamp(r.entry_ts).tz_convert(ny).strftime('%H:%M'):>5} "
+              f"{pd.Timestamp(r.exit_ts).tz_convert(ny).strftime('%H:%M'):>5} "
+              f"{'LONG' if r.direction > 0 else 'SHORT':>5} "
+              f"{r.entry_fill:>9.2f} {r.stop_price:>9.2f} {r.target_price:>9.2f} "
+              f"{int(r.contracts):>3} {r.r_multiple:>+6.2f} {r.net_pnl:>+9.2f}  "
+              f"{r.exit_reason}")
 
 
 def _export(trades, df1, cfg, args) -> None:

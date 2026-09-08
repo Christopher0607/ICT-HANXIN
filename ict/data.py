@@ -62,7 +62,16 @@ def add_time_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_raw(pattern: str) -> pd.DataFrame:
-    """Concatenate the raw parquet shards matching ``pattern`` under data/raw."""
+    """Concatenate the raw parquet shards matching ``pattern`` under data/raw.
+
+    Shards may overlap. Fetching a new window deliberately re-requests days we
+    already hold so the two copies can be compared (see
+    ``scripts/fetch_databento.py``), which leaves duplicate timestamps here.
+    An overlap where both copies agree is dropped silently; one where they
+    disagree is a real defect -- a revised bar, a different continuous
+    contract, a changed timestamp convention -- and raises rather than letting
+    ``drop_duplicates`` pick a winner at random.
+    """
     files = sorted(RAW_DIR.glob(pattern))
     if not files:
         raise FileNotFoundError(
@@ -72,8 +81,27 @@ def load_raw(pattern: str) -> pd.DataFrame:
     frames = [pd.read_parquet(f) for f in files]
     df = pd.concat(frames, ignore_index=True)
     df = df.sort_values("ts", kind="mergesort").reset_index(drop=True)
+    df = _collapse_identical_overlap(df)
     assert_clean(df)
     return df
+
+
+def _collapse_identical_overlap(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop duplicate timestamps whose rows agree; raise on any that do not."""
+    dup = df["ts"].duplicated(keep=False)
+    if not dup.any():
+        return df
+
+    cols = [c for c in df.columns if c != "ts"]
+    conflict = df[dup].groupby("ts", sort=False)[cols].nunique().gt(1).any(axis=1)
+    if conflict.any():
+        bad = conflict[conflict].index
+        raise ValueError(
+            f"{len(bad)} timestamps appear in more than one shard with different "
+            f"values, first at {bad[0]}. The shards disagree about the same bar; "
+            "re-fetch rather than guessing which copy is right."
+        )
+    return df.drop_duplicates(subset="ts", keep="first").reset_index(drop=True)
 
 
 def assert_clean(df: pd.DataFrame) -> None:

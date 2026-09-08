@@ -33,6 +33,28 @@ HEADER = """//@version=6
 """
 
 
+def join_continuations(lines: list[str]) -> list[str]:
+    """Fold wrapped statements back onto one line.
+
+    Pine marks a continuation by indenting it a number of spaces that is *not*
+    a multiple of four -- that is the language's own rule for telling a
+    continuation from a new block, so it is safe to key off. Folding them saves
+    the leading whitespace of every wrapped line, which matters only because
+    this file exists to be pasted through a clipboard that has truncated a
+    paste before.
+    """
+    out: list[str] = []
+    for line in lines:
+        indent = len(line) - len(line.lstrip(" "))
+        prev = out[-1] if out else ""
+        if (line.strip() and out and prev.strip() and indent % 4 != 0
+                and not prev.lstrip().startswith("//")):
+            out[-1] = prev.rstrip() + " " + line.strip()
+        else:
+            out.append(line)
+    return out
+
+
 def compact(src: pathlib.Path) -> str:
     lines = src.read_text(encoding="ascii").split("\n")
     out = []
@@ -45,7 +67,7 @@ def compact(src: pathlib.Path) -> str:
         if not stripped and out and not out[-1].strip():
             continue  # collapse runs of blank lines
         out.append(line)
-    body = "\n".join(out).lstrip("\n")
+    body = "\n".join(join_continuations(out)).lstrip("\n")
     return HEADER.format(src=src.name) + body
 
 
