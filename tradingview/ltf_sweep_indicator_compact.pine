@@ -5,7 +5,7 @@
 // CLOSE and set alerts to "Once Per Bar Close". Keep this file pure ASCII.
 // Evaluate on BAR CLOSE. Set alerts to "Once Per Bar Close".
 
-indicator("LTF Sweep - alerts", "LTF Sweep (alerts) v4", overlay = true, max_boxes_count = 200, max_lines_count = 300, max_labels_count = 300)
+indicator("LTF Sweep - alerts", "LTF Sweep (alerts) v5", overlay = true, max_boxes_count = 200, max_lines_count = 300, max_labels_count = 300)
 
 grpS = "Setup"
 lookbackCandles = input.int(4,    "15m candles forming the pool", minval=1, maxval=20, group=grpS)
@@ -76,6 +76,7 @@ var int nBlockDaily  = 0
 var int nBlockTgt    = 0
 var int nClampQty    = 0
 var int nSameBar     = 0    // trades that opened and closed inside one bar
+var int nRejPremise  = 0    // price already past the gap when the CHoCH confirmed
 
 var float mllFloor  = na
 var float dayOpenEq = na
@@ -84,7 +85,7 @@ px(v) => str.tostring(v, format.mintick)
 
 // screenshot -- says which build is actually running. Two round trips went on
 if barstate.isfirst and debugLog
-    log.info("LTF Sweep v4")
+    log.info("LTF Sweep v5")
 
 inSweepWin = not na(time(timeframe.period, sweepWindow,  tz))
 inEntryWin = not na(time(timeframe.period, entryWindow,  tz))
@@ -212,7 +213,9 @@ if confirmed
     e = (fvgTop + fvgBot) / 2.0
     s = setupDir == 1 ? protective - stopBuffer : protective + stopBuffer
     r = math.abs(e - s)
-    ok = r >= minRiskPts and r <= maxRiskPts and (setupDir == 1 ? s < e : s > e)
+    okRisk = r >= minRiskPts and r <= maxRiskPts and (setupDir == 1 ? s < e : s > e)
+    retraceLeft = setupDir == 1 ? close > e : close < e
+    ok = okRisk and retraceLeft
     q0 = ok ? int(math.floor(effRisk / (r * pointValue))) : 0
     q = propMode and q0 > maxMicros ? maxMicros : q0
     if propMode and q0 > maxMicros
@@ -227,12 +230,14 @@ if confirmed
         if debugLog
             log.info("armed " + (setupDir == 1 ? "LONG" : "SHORT") + "  entry " + px(e) + "  stop " + px(s) + "  target " + px(targetPx) + "  risk " + str.tostring(r, "#.##") + " pts  qty " + str.tostring(q))
     else
-        if not ok
+        if not okRisk
             nRejRisk += 1
+        else if not retraceLeft
+            nRejPremise += 1
         else
             nRejQty += 1
         if debugLog
-            log.warning("rejected: risk " + str.tostring(r, "#.##") + " pts (band " + str.tostring(minRiskPts) + "-" + str.tostring(maxRiskPts) + "), budget $" + str.tostring(effRisk, "#") + ", qty " + str.tostring(q))
+            log.warning("rejected (" + (not okRisk ? "risk band" : not retraceLeft ? "price already past the gap" : "under one contract") + "): risk " + str.tostring(r, "#.##") + " pts, budget $" + str.tostring(effRisk, "#") + ", qty " + str.tostring(q))
         stage    := 0
         setupDir := 0
 
@@ -351,7 +356,7 @@ if showTable and barstate.islast
         filled = nFilled
         row(7, "chart", syminfo.ticker + " tf=" + timeframe.period + (tfOk ? "" : " NEEDS 1"), tfOk ? color.white : color.red)
         row(8, "sess/swp/chc", str.tostring(nBarsSession) + " / " + str.tostring(nSweep) + " / " + str.tostring(nChoch), nSweep > 0 ? color.white : color.red)
-        row(9, "conf/armed/rej", str.tostring(nConfirm) + " / " + str.tostring(nArmed) + " / " + str.tostring(nRejRisk + nRejQty), nArmed > 0 ? color.white : color.red)
+        row(9, "conf/armed/rej", str.tostring(nConfirm) + " / " + str.tostring(nArmed) + " / " + str.tostring(nRejRisk + nRejQty) + " (+" + str.tostring(nRejPremise) + " late)", nArmed > 0 ? color.white : color.red)
         row(10, "FILLED", str.tostring(filled) + " (" + str.tostring(nSameBar) + " same-bar)", filled > 0 ? color.lime : color.red)
     if propMode
         room = propEquity - mllFloor

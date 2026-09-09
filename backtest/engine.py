@@ -78,6 +78,24 @@ class BacktestConfig:
     #: single largest execution risk, so it is worth running both.
     entry_fill_mode: str = "touch"
 
+    #: Refuse a resting limit the market has already passed.
+    #:
+    #: A sell limit below the market is not a limit order -- it is marketable,
+    #: and the exchange fills it at the prevailing price, not at the level the
+    #: setup was priced from. Filling it at the limit invents a price the
+    #: market had already left behind, and sizes the trade off a stop distance
+    #: that no longer applies.
+    #:
+    #: In the LTF sweep data every one of these was already marketable on the
+    #: order's FIRST live bar -- none was a gap. That is not an execution
+    #: detail, it is the setup's premise failing: the model enters on a
+    #: retracement into the gap, and price was already through it.
+    #: 5.3% of out-of-sample fills and 6.6% of development fills, and they lost
+    #: at a 21% win rate in development against 50% for the rest.
+    #:
+    #: Set False to reproduce the old numbers.
+    skip_marketable_entries: bool = True
+
     #: The same question for the profit target, which is also a resting limit.
     #: It matters most exactly where the entry assumption matters least: a tight
     #: target is touched often and briefly, so a sweep that concludes "smaller
@@ -174,6 +192,15 @@ def simulate(orders: pd.DataFrame, bars: pd.DataFrame, config: BacktestConfig | 
             # Stop too wide to fit the risk budget at even one contract.
             results.append(_unfilled(order, reason="oversized"))
             continue
+
+        if config.skip_marketable_entries and start < expiry:
+            opened = open_[start]
+            marketable = (opened < entry) if direction > 0 else (opened > entry)
+            if marketable:
+                # Price is already through the level this setup was priced
+                # from, so the retracement it waits for never happened.
+                results.append(_unfilled(order, reason="premise_failed"))
+                continue
 
         fill_index = _find_fill(low, high, start, expiry, entry, direction,
                                 config.entry_fill_mode)

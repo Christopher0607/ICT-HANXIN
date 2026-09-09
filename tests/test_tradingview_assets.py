@@ -23,7 +23,7 @@ SCRIPTS = sorted(p for p in PINE_DIR.glob("*.pine") if not p.stem.endswith("_com
 COMPACT = sorted(PINE_DIR.glob("*_compact.pine"))
 
 #: Bumped whenever a change needs to be visibly confirmed on someone's chart.
-VERSION = "v4"
+VERSION = "v5"
 
 
 def strip_comments_and_strings(src: str) -> str:
@@ -470,3 +470,19 @@ def test_same_bar_round_trips_are_counted(path):
     it directly.
     """
     assert "nSameBar" in path.read_text()
+
+
+@pytest.mark.parametrize("path", SCRIPTS + COMPACT, ids=lambda p: p.name)
+def test_a_setup_price_has_already_run_past_is_refused(path):
+    """Mirrors BacktestConfig.skip_marketable_entries on the chart.
+
+    The model enters on a retracement INTO the gap. Past the gap already and
+    the limit is marketable: it fills instantly at the market, not at the level
+    the stop was sized from. The research engine declines these; if the chart
+    took them the two would disagree on 5% of signals, and on the 5% that lost
+    at a 21% win rate in development.
+    """
+    src = path.read_text()
+    assert "retraceLeft = setupDir == 1 ? close > e : close < e" in src
+    assert "ok = okRisk and retraceLeft" in src
+    assert "nRejPremise" in src, "the refusals must be counted, not silent"

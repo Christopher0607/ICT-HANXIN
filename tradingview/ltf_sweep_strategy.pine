@@ -37,7 +37,7 @@
 // CHoCH, and the Strategy Tester simply empty. Pinning margin to 0 turns the
 // funds check off; the capital figure then only scales the equity curve's
 // percentages. Neither value changes a single signal, contract count or P&L.
-strategy("LTF Sweep - 15m pool / 1m CHoCH / 1:1", "LTF Sweep v4", overlay = true, initial_capital = 100000, currency = currency.USD, default_qty_type = strategy.fixed, default_qty_value = 1, margin_long = 0, margin_short = 0, calc_on_every_tick = false, process_orders_on_close = false, max_boxes_count = 200, max_lines_count = 300, max_labels_count = 300)
+strategy("LTF Sweep - 15m pool / 1m CHoCH / 1:1", "LTF Sweep v5", overlay = true, initial_capital = 100000, currency = currency.USD, default_qty_type = strategy.fixed, default_qty_value = 1, margin_long = 0, margin_short = 0, calc_on_every_tick = false, process_orders_on_close = false, max_boxes_count = 200, max_lines_count = 300, max_labels_count = 300)
 
 // -- inputs -------------------------------------------------------------------
 grpS = "Setup"
@@ -138,6 +138,7 @@ var int nBlockDaily  = 0
 var int nBlockTgt    = 0
 var int nClampQty    = 0
 var int nSameBar     = 0    // trades that opened and closed inside one bar
+var int nRejPremise  = 0    // price already past the gap when the CHoCH confirmed
 
 // Trailing loss floor and the session's opening equity. Both are maintained
 // in each script's own tail, because Pine functions cannot assign to globals
@@ -151,7 +152,7 @@ px(v) => str.tostring(v, format.mintick)
 // screenshot -- says which build is actually running. Two round trips went on
 // "is the new script loaded?"; this answers it without opening anything.
 if barstate.isfirst and debugLog
-    log.info("LTF Sweep v4")
+    log.info("LTF Sweep v5")
 
 // -- session state ------------------------------------------------------------
 inSweepWin = not na(time(timeframe.period, sweepWindow,  tz))
@@ -297,7 +298,15 @@ if confirmed
     e = (fvgTop + fvgBot) / 2.0
     s = setupDir == 1 ? protective - stopBuffer : protective + stopBuffer
     r = math.abs(e - s)
-    ok = r >= minRiskPts and r <= maxRiskPts and (setupDir == 1 ? s < e : s > e)
+    okRisk = r >= minRiskPts and r <= maxRiskPts and (setupDir == 1 ? s < e : s > e)
+    // The model enters on a retracement INTO the gap, so price has to still be
+    // on the far side of it. Past the gap already, and the order is marketable:
+    // it would fill instantly at the market rather than at the level the stop
+    // was sized from -- a different trade wearing this setup's numbers. In the
+    // research data that is 5.3% of out-of-sample signals, and in development
+    // they lost at a 21% win rate against 50% for everything else.
+    retraceLeft = setupDir == 1 ? close > e : close < e
+    ok = okRisk and retraceLeft
     // Round down: taking one extra contract would breach the risk budget, and
     // a stop too wide to fit even one contract is skipped, not forced.
     q0 = ok ? int(math.floor(effRisk / (r * pointValue))) : 0
@@ -321,14 +330,17 @@ if confirmed
         // Two different failures. Risk outside the band means the structure was
         // too tight or too wide to trade; qty zero means the stop was wide
         // enough that one contract would already exceed the risk budget.
-        if not ok
+        if not okRisk
             nRejRisk += 1
+        else if not retraceLeft
+            nRejPremise += 1
         else
             nRejQty += 1
         if debugLog
-            log.warning("rejected: risk " + str.tostring(r, "#.##") + " pts (band "
-                 + str.tostring(minRiskPts) + "-" + str.tostring(maxRiskPts) + "), budget $"
-                 + str.tostring(effRisk, "#") + ", qty " + str.tostring(q))
+            log.warning("rejected (" + (not okRisk ? "risk band" : not retraceLeft
+                 ? "price already past the gap" : "under one contract") + "): risk "
+                 + str.tostring(r, "#.##") + " pts, budget $" + str.tostring(effRisk, "#")
+                 + ", qty " + str.tostring(q))
         stage    := 0
         setupDir := 0
 
@@ -519,7 +531,8 @@ if showTable and barstate.islast
         row(8, "sess/swp/chc", str.tostring(nBarsSession) + " / " + str.tostring(nSweep)
              + " / " + str.tostring(nChoch), nSweep > 0 ? color.white : color.red)
         row(9, "conf/armed/rej", str.tostring(nConfirm) + " / " + str.tostring(nArmed)
-             + " / " + str.tostring(nRejRisk + nRejQty), nArmed > 0 ? color.white : color.red)
+             + " / " + str.tostring(nRejRisk + nRejQty) + " (+" + str.tostring(nRejPremise)
+             + " late)", nArmed > 0 ? color.white : color.red)
         row(10, "FILLED", str.tostring(filled) + " (" + str.tostring(nSameBar) + " same-bar)",
              filled > 0 ? color.lime : color.red)
     // -- prop firm ------------------------------------------------------------

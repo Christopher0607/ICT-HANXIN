@@ -142,7 +142,10 @@ def test_exit_fill_mode_governs_the_target_but_not_the_stop():
     briefly — so a reward-to-risk sweep that favours small targets has to be
     checked against this assumption before it is believed.
     """
-    tagged = _bars([(100, 100.2, 99.8, 100), (100, 102.0, 99.9, 101)])
+    # The first bar has to OPEN above a buy limit, or the order is marketable
+    # before it rests and the engine declines it -- see the premise_failed
+    # tests below.
+    tagged = _bars([(100.8, 100.9, 99.8, 100), (100, 102.0, 99.9, 101)])
     o = _order(entry_price=100.5, stop_price=98.0, target_price=102.0,
                expires_at=TS[1], time_exit_ts=TS[1])
     # Price reached exactly 102.00.
@@ -160,3 +163,71 @@ def test_exit_fill_mode_governs_the_target_but_not_the_stop():
 def test_rejects_an_invalid_exit_fill_mode():
     with pytest.raises(ValueError, match="exit_fill_mode"):
         BacktestConfig(exit_fill_mode="hopeful")
+
+
+# ---------------------------------------------------------------------------
+# a limit the market has already passed
+
+def test_a_buy_limit_the_market_opened_below_is_declined():
+    """It is not a limit order any more; it is marketable.
+
+    A buy limit at 100 with the market at 98 fills instantly at 98, not at
+    100. Filling it at 100 invents a price the market had already left behind
+    and sizes the trade off a stop distance that no longer applies.
+    """
+    bars = _bars([(98.0, 99.0, 97.0, 98.5), (99, 111, 98, 110)])
+    t = simulate(_order(entry_price=100.0), bars)
+    assert not bool(t.filled[0])
+    assert t.exit_reason[0] == "premise_failed"
+
+
+def test_a_sell_limit_the_market_opened_above_is_declined():
+    """The same test with the signs flipped, which is where it would go wrong.
+
+    This is the case that showed up live: a sell limit at 29,466 while price
+    was at 29,516. TradingView filled it at 29,516; the engine was filling it
+    at 29,466.
+    """
+    bars = _bars([(102.0, 103.0, 101.0, 102.5), (101, 102, 89, 90)])
+    t = simulate(_order(direction=-1, entry_price=100.0,
+                        stop_price=105.0, target_price=95.0), bars)
+    assert not bool(t.filled[0])
+    assert t.exit_reason[0] == "premise_failed"
+
+
+def test_a_genuine_resting_limit_is_untouched():
+    """The open on the correct side of the limit still fills normally."""
+    long_t = simulate(_order(), RISING)                       # opens 101, limit 100
+    assert bool(long_t.filled[0]) and long_t.entry_fill[0] == 100.0
+
+    bars = _bars([(98.0, 101.0, 97.0, 100), (100, 101, 89, 90)])
+    short_t = simulate(_order(direction=-1, entry_price=100.0,
+                              stop_price=105.0, target_price=95.0), bars)
+    assert bool(short_t.filled[0]) and short_t.entry_fill[0] == 100.0
+
+
+def test_declined_orders_stay_in_the_log_and_count_against_fill_rate():
+    """Silently dropping them would flatter the fill rate.
+
+    The point of keeping unfilled orders is that a model which cannot get
+    filled is not a good model, and hiding the rejects hides that.
+    """
+    bars = _bars([(98.0, 99.0, 97.0, 98.5), (99, 111, 98, 110)])
+    t = simulate(_order(entry_price=100.0), bars)
+    assert len(t) == 1
+    assert t.net_pnl[0] == 0.0
+    assert t.contracts[0] == 0
+
+
+def test_the_old_behaviour_is_still_reachable_for_comparison():
+    """Reproducing the previous numbers has to stay possible.
+
+    Every figure published before this fix was computed with these fills in,
+    so the switch that turns them back on is what makes those figures
+    checkable rather than merely superseded.
+    """
+    bars = _bars([(98.0, 99.0, 97.0, 98.5), (99, 111, 98, 110)])
+    t = simulate(_order(entry_price=100.0), bars,
+                 BacktestConfig(skip_marketable_entries=False))
+    assert bool(t.filled[0])
+    assert t.entry_fill[0] == 100.0
