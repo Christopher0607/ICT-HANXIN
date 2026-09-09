@@ -37,7 +37,7 @@
 // CHoCH, and the Strategy Tester simply empty. Pinning margin to 0 turns the
 // funds check off; the capital figure then only scales the equity curve's
 // percentages. Neither value changes a single signal, contract count or P&L.
-strategy("LTF Sweep - 15m pool / 1m CHoCH / 1:1", "LTF Sweep", overlay = true, initial_capital = 100000, currency = currency.USD, default_qty_type = strategy.fixed, default_qty_value = 1, margin_long = 0, margin_short = 0, calc_on_every_tick = false, process_orders_on_close = false, max_boxes_count = 200, max_lines_count = 300, max_labels_count = 300)
+strategy("LTF Sweep - 15m pool / 1m CHoCH / 1:1", "LTF Sweep v4", overlay = true, initial_capital = 100000, currency = currency.USD, default_qty_type = strategy.fixed, default_qty_value = 1, margin_long = 0, margin_short = 0, calc_on_every_tick = false, process_orders_on_close = false, max_boxes_count = 200, max_lines_count = 300, max_labels_count = 300)
 
 // -- inputs -------------------------------------------------------------------
 grpS = "Setup"
@@ -146,6 +146,12 @@ var float mllFloor  = na
 var float dayOpenEq = na
 
 px(v) => str.tostring(v, format.mintick)
+
+// The version is in the shorttitle so the chart legend -- top left, in every
+// screenshot -- says which build is actually running. Two round trips went on
+// "is the new script loaded?"; this answers it without opening anything.
+if barstate.isfirst and debugLog
+    log.info("LTF Sweep v4")
 
 // -- session state ------------------------------------------------------------
 inSweepWin = not na(time(timeframe.period, sweepWindow,  tz))
@@ -370,6 +376,34 @@ dayPnl      = propEquity - dayOpenEq
 plannedRisk = riskPts * pointValue * qty
 blockReason = propBlock(propEquity, mllFloor, dayPnl, strategy.netprofit, plannedRisk)
 
+// -- what happened to the last order (MUST run before placing a new one) -----
+// strategy.position_size is sampled at the close, so on the bar a trade EXITS
+// it already reads 0 while stage is still 2. An order block above this line
+// therefore re-issues the identical limit -- and nothing then owns it, because
+// the only cancel path below requires stage == 2, which this reset clears.
+// That orphaned order is what filled a second time at 29,100.50 two minutes
+// later, and what filled at 18:00 ET hours outside the session at the same
+// price as the trade before it.
+tradesTaken = strategy.closedtrades + strategy.opentrades
+justFilled  = tradesTaken > nz(tradesTaken[1], 0)
+justClosed  = strategy.position_size == 0 and strategy.position_size[1] != 0
+
+if justFilled
+    tradedToday := oneTradePerDay ? true : tradedToday
+    if debugLog
+        log.info("filled " + str.tostring(qty) + " @ " + px(entryPx)
+             + (strategy.position_size == 0 ? " (opened and closed in one bar)" : ""))
+
+// A setup is spent the moment its order fills, open position or not.
+// Deliberately not gated on tradedToday: re-placing an order that already
+// filled is wrong even with the one-trade-per-day cap switched off.
+if (justFilled or justClosed) and strategy.position_size == 0
+    nSameBar += justFilled ? 1 : 0
+    strategy.cancel("LTF")
+    stage    := 0
+    setupDir := 0
+
+// -- orders ------------------------------------------------------------------
 if stage == 2 and strategy.position_size == 0 and strategy.opentrades == 0
     if blockReason != 0
         nBlockMLL   += blockReason == 1 ? 1 : 0
@@ -397,34 +431,6 @@ if stage == 2 and strategy.position_size == 0 and strategy.opentrades == 0
         strategy.exit("LTF x", "LTF", stop = stopPx, limit = targetPx,
              alert_message = msg("exit", qty, entryPx, stopPx, targetPx, riskPts))
 
-// strategy.position_size is only sampled at the close, so a trade that opens
-// AND closes inside one bar is invisible to it: both of the obvious
-// transitions read 0 against 0. Written that way the setup never gets marked
-// as taken and stage never resets, so the block above re-places the very same
-// limit order on the next bar and it can fill again -- two trades at one entry
-// price, which is exactly what showed up on 2026-09-02. Counting trades sees
-// it, because a round trip inside one bar still increments closedtrades.
-//
-// This became reachable when the exit started being attached to the entry
-// before it fills. That is the right thing to do -- it is what protects the
-// fill bar -- so the fix belongs here, not in going back to an unprotected
-// first bar. Same-bar round trips are routine at a 1:1 target: two of the
-// first five forward trades opened and closed inside the same minute.
-tradesTaken = strategy.closedtrades + strategy.opentrades
-justFilled  = tradesTaken > nz(tradesTaken[1], 0)
-if justFilled
-    tradedToday := oneTradePerDay ? true : tradedToday
-    if debugLog
-        log.info("filled " + str.tostring(qty) + " @ " + px(entryPx)
-             + (strategy.position_size == 0 ? " (opened and closed in one bar)" : ""))
-    // The setup is spent whether or not a position is still open. Not gated on
-    // tradedToday: re-placing a limit that already filled is never intended,
-    // even with the one-trade-per-day cap switched off.
-    if strategy.position_size == 0
-        nSameBar += 1
-        stage    := 0
-        setupDir := 0
-
 // Cancel an unfilled limit once the entry window shuts.
 if stage == 2 and not inEntryWin and strategy.position_size == 0
     strategy.cancel("LTF")
@@ -439,12 +445,6 @@ if sessionEnd
     if strategy.position_size != 0
         strategy.close_all(comment = "session end",
              alert_message = msg("close", qty, entryPx, stopPx, targetPx, riskPts))
-    stage := 0
-    setupDir := 0
-
-// The ordinary case: a position that was open at the last close is gone now.
-// The same-bar round trip is handled above, where it is actually visible.
-if strategy.position_size == 0 and strategy.position_size[1] != 0
     stage := 0
     setupDir := 0
 

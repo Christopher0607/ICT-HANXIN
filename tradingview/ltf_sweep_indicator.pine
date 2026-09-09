@@ -19,7 +19,7 @@
 // Evaluate on BAR CLOSE. Set alerts to "Once Per Bar Close".
 // =============================================================================
 
-indicator("LTF Sweep - alerts", "LTF Sweep (alerts)", overlay = true, max_boxes_count = 200, max_lines_count = 300, max_labels_count = 300)
+indicator("LTF Sweep - alerts", "LTF Sweep (alerts) v4", overlay = true, max_boxes_count = 200, max_lines_count = 300, max_labels_count = 300)
 
 // -- inputs -------------------------------------------------------------------
 grpS = "Setup"
@@ -128,6 +128,12 @@ var float mllFloor  = na
 var float dayOpenEq = na
 
 px(v) => str.tostring(v, format.mintick)
+
+// The version is in the shorttitle so the chart legend -- top left, in every
+// screenshot -- says which build is actually running. Two round trips went on
+// "is the new script loaded?"; this answers it without opening anything.
+if barstate.isfirst and debugLog
+    log.info("LTF Sweep v4")
 
 // -- session state ------------------------------------------------------------
 inSweepWin = not na(time(timeframe.period, sweepWindow,  tz))

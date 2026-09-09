@@ -22,6 +22,9 @@ PINE_DIR = pathlib.Path(__file__).resolve().parent.parent / "tradingview"
 SCRIPTS = sorted(p for p in PINE_DIR.glob("*.pine") if not p.stem.endswith("_compact"))
 COMPACT = sorted(PINE_DIR.glob("*_compact.pine"))
 
+#: Bumped whenever a change needs to be visibly confirmed on someone's chart.
+VERSION = "v4"
+
 
 def strip_comments_and_strings(src: str) -> str:
     src = re.sub(r'"[^"\n]*"', '""', src)
@@ -403,16 +406,60 @@ def test_fills_are_detected_by_trade_count_not_position_size():
     )
 
 
-def test_a_filled_setup_cannot_be_re_armed():
-    """A limit that already filled must never be placed again.
+def test_a_spent_setup_is_cleared_before_any_new_order_is_placed():
+    """The regression that survived the previous fix.
 
-    Deliberately not gated on tradedToday: re-placing a spent order is wrong
-    even with the one-trade-per-day cap switched off.
+    Pine samples strategy.position_size at the close, so on the bar a trade
+    EXITS it already reads 0 while stage is still 2. If the order block runs
+    before the reset, it re-issues the identical limit -- and nothing then owns
+    that order, because the only cancel path requires stage == 2, which the
+    reset has just cleared. The orphan sits in the book until price touches it.
+
+    On the chart that produced two fills at 29,100.50 two minutes apart, and a
+    fill at 18:00 ET -- hours outside the trading session -- at the same price
+    as the trade before it. Ordering is the whole fix, so ordering is the test.
     """
+    lines = (PINE_DIR / "ltf_sweep_strategy.pine").read_text().split("\n")
+
+    def line_of(prefix):
+        for i, l in enumerate(lines):
+            if l.startswith(prefix):
+                return i
+        raise AssertionError(f"no line starts with {prefix!r}")
+
+    reset = line_of("if (justFilled or justClosed) and strategy.position_size == 0")
+    order = line_of("if stage == 2 and strategy.position_size == 0 and strategy.opentrades")
+    assert reset < order, (
+        "the spent-setup reset must run BEFORE the order block; with it after, "
+        "the exit bar re-places the same limit and orphans it"
+    )
+
+
+def test_the_spent_setup_reset_also_cancels_any_working_order():
+    """Belt and braces against leaving an order nothing can cancel."""
     src = (PINE_DIR / "ltf_sweep_strategy.pine").read_text()
-    body = block_under(src, "if justFilled")
-    assert "if strategy.position_size == 0" in body
-    assert "stage    := 0" in body, "a same-bar round trip must clear the setup"
+    body = block_under(src, "if (justFilled or justClosed) and strategy.position_size == 0")
+    assert 'strategy.cancel("LTF")' in body
+    assert "stage    := 0" in body
+
+
+def test_the_old_trailing_reset_is_gone():
+    """It ran after the order block, which is what allowed the orphan."""
+    src = (PINE_DIR / "ltf_sweep_strategy.pine").read_text()
+    assert "if strategy.position_size == 0 and strategy.position_size[1] != 0\n    stage := 0" not in src
+
+
+@pytest.mark.parametrize("path", SCRIPTS + COMPACT, ids=lambda p: p.name)
+def test_every_build_carries_the_same_version_marker(path):
+    """The shorttitle shows in the chart legend, so the screenshot says it.
+
+    Two round trips went on "is the new script actually loaded?" while the
+    trade list was identical for a different reason. A version in the legend
+    settles that without opening a panel.
+    """
+    src = path.read_text()
+    found = set(re.findall(r'"LTF Sweep(?: \(alerts\))? (v\d+)"', src))
+    assert found == {VERSION}, f"{path.name} carries {found or 'no version'}, expected {VERSION}"
 
 
 @pytest.mark.parametrize("path", SCRIPTS + COMPACT, ids=lambda p: p.name)

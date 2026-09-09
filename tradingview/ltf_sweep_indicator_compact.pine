@@ -5,7 +5,7 @@
 // CLOSE and set alerts to "Once Per Bar Close". Keep this file pure ASCII.
 // Evaluate on BAR CLOSE. Set alerts to "Once Per Bar Close".
 
-indicator("LTF Sweep - alerts", "LTF Sweep (alerts)", overlay = true, max_boxes_count = 200, max_lines_count = 300, max_labels_count = 300)
+indicator("LTF Sweep - alerts", "LTF Sweep (alerts) v4", overlay = true, max_boxes_count = 200, max_lines_count = 300, max_labels_count = 300)
 
 grpS = "Setup"
 lookbackCandles = input.int(4,    "15m candles forming the pool", minval=1, maxval=20, group=grpS)
@@ -81,6 +81,10 @@ var float mllFloor  = na
 var float dayOpenEq = na
 
 px(v) => str.tostring(v, format.mintick)
+
+// screenshot -- says which build is actually running. Two round trips went on
+if barstate.isfirst and debugLog
+    log.info("LTF Sweep v4")
 
 inSweepWin = not na(time(timeframe.period, sweepWindow,  tz))
 inEntryWin = not na(time(timeframe.period, entryWindow,  tz))
