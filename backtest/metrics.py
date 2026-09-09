@@ -26,10 +26,12 @@ def summarize(trades: pd.DataFrame) -> dict:
     losses = filled[pnl < 0]
     gross_win = float(wins["net_pnl"].sum())
     gross_loss = float(-losses["net_pnl"].sum())
-    equity = pnl.cumsum()
-    drawdown = equity - equity.cummax()
-    r_equity = r.cumsum()
-    r_drawdown = r_equity - r_equity.cummax()
+    # The opening balance has to be in the running peak. Without it a series
+    # that starts with losses is measured from its own first low rather than
+    # from where the account began, understating the drawdown -- over the full
+    # 2016-2026 history that was $552 of a $70,556 figure.
+    drawdown = _drawdown(pnl)
+    r_drawdown = _drawdown(r)
 
     return {
         "signals": total_signals,
@@ -51,6 +53,13 @@ def summarize(trades: pd.DataFrame) -> dict:
         "exit_reasons": filled["exit_reason"].value_counts().to_dict(),
         "sharpe_per_trade": _sharpe(pnl),
     }
+
+
+def _drawdown(pnl: pd.Series) -> pd.Series:
+    """Running peak-to-valley, measured from an opening balance of zero."""
+    equity = pd.concat([pd.Series([0.0]), pnl.reset_index(drop=True).cumsum()],
+                       ignore_index=True)
+    return equity - equity.cummax()
 
 
 def _sharpe(pnl: pd.Series) -> float:
@@ -88,10 +97,12 @@ def equity_curve(trades: pd.DataFrame) -> pd.DataFrame:
     if filled.empty:
         return pd.DataFrame(columns=["exit_ts", "equity", "drawdown"])
     equity = filled["net_pnl"].cumsum()
+    # _drawdown prepends the opening balance, so drop that first row to keep
+    # one value per trade.
     return pd.DataFrame({
         "exit_ts": filled["exit_ts"].to_numpy(),
         "equity": equity.to_numpy(),
-        "drawdown": (equity - equity.cummax()).to_numpy(),
+        "drawdown": _drawdown(filled["net_pnl"]).to_numpy()[1:],
     })
 
 
