@@ -75,6 +75,7 @@ var int nBlockMLL    = 0
 var int nBlockDaily  = 0
 var int nBlockTgt    = 0
 var int nClampQty    = 0
+var int nSameBar     = 0    // trades that opened and closed inside one bar
 
 var float mllFloor  = na
 var float dayOpenEq = na
@@ -274,11 +275,18 @@ if stage == 2 and strategy.position_size == 0 and strategy.opentrades == 0
             strategy.entry("LTF", strategy.short, qty = qty, limit = entryPx, alert_message = msg("sell", qty, entryPx, stopPx, targetPx, riskPts))
         strategy.exit("LTF x", "LTF", stop = stopPx, limit = targetPx, alert_message = msg("exit", qty, entryPx, stopPx, targetPx, riskPts))
 
-justFilled = strategy.position_size != 0 and strategy.position_size[1] == 0
+// it, because a round trip inside one bar still increments closedtrades.
+// first bar. Same-bar round trips are routine at a 1:1 target: two of the
+tradesTaken = strategy.closedtrades + strategy.opentrades
+justFilled  = tradesTaken > nz(tradesTaken[1], 0)
 if justFilled
     tradedToday := oneTradePerDay ? true : tradedToday
     if debugLog
-        log.info("filled " + str.tostring(strategy.position_size) + " @ " + px(strategy.position_avg_price))
+        log.info("filled " + str.tostring(qty) + " @ " + px(entryPx) + (strategy.position_size == 0 ? " (opened and closed in one bar)" : ""))
+    if strategy.position_size == 0
+        nSameBar += 1
+        stage    := 0
+        setupDir := 0
 
 if stage == 2 and not inEntryWin and strategy.position_size == 0
     strategy.cancel("LTF")
@@ -294,6 +302,7 @@ if sessionEnd
     stage := 0
     setupDir := 0
 
+// The same-bar round trip is handled above, where it is actually visible.
 if strategy.position_size == 0 and strategy.position_size[1] != 0
     stage := 0
     setupDir := 0
@@ -339,7 +348,7 @@ if showTable and barstate.islast
         row(7, "chart", syminfo.ticker + " tf=" + timeframe.period + (tfOk ? "" : " NEEDS 1"), tfOk ? color.white : color.red)
         row(8, "sess/swp/chc", str.tostring(nBarsSession) + " / " + str.tostring(nSweep) + " / " + str.tostring(nChoch), nSweep > 0 ? color.white : color.red)
         row(9, "conf/armed/rej", str.tostring(nConfirm) + " / " + str.tostring(nArmed) + " / " + str.tostring(nRejRisk + nRejQty), nArmed > 0 ? color.white : color.red)
-        row(10, "FILLED", str.tostring(filled), filled > 0 ? color.lime : color.red)
+        row(10, "FILLED", str.tostring(filled) + " (" + str.tostring(nSameBar) + " same-bar)", filled > 0 ? color.lime : color.red)
     if propMode
         room = propEquity - mllFloor
         row(11, "loss limit", px(mllFloor) + "  room $" + str.tostring(room, "#"), room > plannedRisk * safetyMult * 2 ? color.white : color.red)

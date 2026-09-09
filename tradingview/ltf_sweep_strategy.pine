@@ -137,6 +137,7 @@ var int nBlockMLL    = 0
 var int nBlockDaily  = 0
 var int nBlockTgt    = 0
 var int nClampQty    = 0
+var int nSameBar     = 0    // trades that opened and closed inside one bar
 
 // Trailing loss floor and the session's opening equity. Both are maintained
 // in each script's own tail, because Pine functions cannot assign to globals
@@ -396,12 +397,33 @@ if stage == 2 and strategy.position_size == 0 and strategy.opentrades == 0
         strategy.exit("LTF x", "LTF", stop = stopPx, limit = targetPx,
              alert_message = msg("exit", qty, entryPx, stopPx, targetPx, riskPts))
 
-justFilled = strategy.position_size != 0 and strategy.position_size[1] == 0
+// strategy.position_size is only sampled at the close, so a trade that opens
+// AND closes inside one bar is invisible to it: both of the obvious
+// transitions read 0 against 0. Written that way the setup never gets marked
+// as taken and stage never resets, so the block above re-places the very same
+// limit order on the next bar and it can fill again -- two trades at one entry
+// price, which is exactly what showed up on 2026-09-02. Counting trades sees
+// it, because a round trip inside one bar still increments closedtrades.
+//
+// This became reachable when the exit started being attached to the entry
+// before it fills. That is the right thing to do -- it is what protects the
+// fill bar -- so the fix belongs here, not in going back to an unprotected
+// first bar. Same-bar round trips are routine at a 1:1 target: two of the
+// first five forward trades opened and closed inside the same minute.
+tradesTaken = strategy.closedtrades + strategy.opentrades
+justFilled  = tradesTaken > nz(tradesTaken[1], 0)
 if justFilled
     tradedToday := oneTradePerDay ? true : tradedToday
     if debugLog
-        log.info("filled " + str.tostring(strategy.position_size) + " @ "
-             + px(strategy.position_avg_price))
+        log.info("filled " + str.tostring(qty) + " @ " + px(entryPx)
+             + (strategy.position_size == 0 ? " (opened and closed in one bar)" : ""))
+    // The setup is spent whether or not a position is still open. Not gated on
+    // tradedToday: re-placing a limit that already filled is never intended,
+    // even with the one-trade-per-day cap switched off.
+    if strategy.position_size == 0
+        nSameBar += 1
+        stage    := 0
+        setupDir := 0
 
 // Cancel an unfilled limit once the entry window shuts.
 if stage == 2 and not inEntryWin and strategy.position_size == 0
@@ -420,6 +442,8 @@ if sessionEnd
     stage := 0
     setupDir := 0
 
+// The ordinary case: a position that was open at the last close is gone now.
+// The same-bar round trip is handled above, where it is actually visible.
 if strategy.position_size == 0 and strategy.position_size[1] != 0
     stage := 0
     setupDir := 0
@@ -496,7 +520,8 @@ if showTable and barstate.islast
              + " / " + str.tostring(nChoch), nSweep > 0 ? color.white : color.red)
         row(9, "conf/armed/rej", str.tostring(nConfirm) + " / " + str.tostring(nArmed)
              + " / " + str.tostring(nRejRisk + nRejQty), nArmed > 0 ? color.white : color.red)
-        row(10, "FILLED", str.tostring(filled), filled > 0 ? color.lime : color.red)
+        row(10, "FILLED", str.tostring(filled) + " (" + str.tostring(nSameBar) + " same-bar)",
+             filled > 0 ? color.lime : color.red)
     // -- prop firm ------------------------------------------------------------
     // Only shown when the rules are on, so the panel stays short otherwise.
     if propMode

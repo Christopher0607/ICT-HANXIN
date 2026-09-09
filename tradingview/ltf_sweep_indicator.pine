@@ -119,6 +119,7 @@ var int nBlockMLL    = 0
 var int nBlockDaily  = 0
 var int nBlockTgt    = 0
 var int nClampQty    = 0
+var int nSameBar     = 0    // trades that opened and closed inside one bar
 
 // Trailing loss floor and the session's opening equity. Both are maintained
 // in each script's own tail, because Pine functions cannot assign to globals
@@ -389,6 +390,10 @@ if hitStop or hitTarget
     alert(msg(hitStop ? "exit_stop" : "exit_target", qty, entryPx, stopPx, targetPx, riskPts),
          alert.freq_once_per_bar_close)
     simNet   += ((hitStop ? stopPx : targetPx) - entryPx) * posDir * pointValue * qty
+    // Counted for parity with the strategy panel. This file already handles
+    // the same-bar case correctly: hitStop/hitTarget are declared after the
+    // fill block, so they see posDir set on this very bar.
+    nSameBar += (fillLong or fillShort) ? 1 : 0
     posDir   := 0
     stage    := 0
     setupDir := 0
@@ -482,7 +487,8 @@ if showTable and barstate.islast
              + " / " + str.tostring(nChoch), nSweep > 0 ? color.white : color.red)
         row(9, "conf/armed/rej", str.tostring(nConfirm) + " / " + str.tostring(nArmed)
              + " / " + str.tostring(nRejRisk + nRejQty), nArmed > 0 ? color.white : color.red)
-        row(10, "FILLED", str.tostring(filled), filled > 0 ? color.lime : color.red)
+        row(10, "FILLED", str.tostring(filled) + " (" + str.tostring(nSameBar) + " same-bar)",
+             filled > 0 ? color.lime : color.red)
     // -- prop firm ------------------------------------------------------------
     // Only shown when the rules are on, so the panel stays short otherwise.
     if propMode

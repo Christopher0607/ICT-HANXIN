@@ -379,3 +379,47 @@ def test_contract_ceiling_cuts_the_trade_down_rather_than_skipping_it(path):
     """Over the ceiling the setup is still the setup, just smaller."""
     src = path.read_text()
     assert "q = propMode and q0 > maxMicros ? maxMicros : q0" in src
+
+
+def test_fills_are_detected_by_trade_count_not_position_size():
+    """The regression this replaced put two trades on one entry price.
+
+    strategy.position_size is only sampled at the close, so a trade that opens
+    AND closes inside one bar reads 0 against 0 on both of the obvious
+    transitions. Written that way the setup is never marked as taken and stage
+    never resets, so the order block re-places the identical limit on the next
+    bar and it fills a second time -- which is what 2026-09-02 showed on the
+    chart, two fills at 29,100.50.
+
+    Same-bar round trips are not a corner case at a 1:1 target: two of the
+    first five forward trades opened and closed inside the same minute.
+    """
+    src = (PINE_DIR / "ltf_sweep_strategy.pine").read_text()
+    assert "tradesTaken = strategy.closedtrades + strategy.opentrades" in src
+    assert "justFilled  = tradesTaken > nz(tradesTaken[1], 0)" in src
+    assert "justFilled = strategy.position_size != 0" not in src, (
+        "fill detection is back on a position_size transition, which cannot "
+        "see a trade that opens and closes inside one bar"
+    )
+
+
+def test_a_filled_setup_cannot_be_re_armed():
+    """A limit that already filled must never be placed again.
+
+    Deliberately not gated on tradedToday: re-placing a spent order is wrong
+    even with the one-trade-per-day cap switched off.
+    """
+    src = (PINE_DIR / "ltf_sweep_strategy.pine").read_text()
+    body = block_under(src, "if justFilled")
+    assert "if strategy.position_size == 0" in body
+    assert "stage    := 0" in body, "a same-bar round trip must clear the setup"
+
+
+@pytest.mark.parametrize("path", SCRIPTS + COMPACT, ids=lambda p: p.name)
+def test_same_bar_round_trips_are_counted(path):
+    """Make the condition that triggered the bug visible on the panel.
+
+    Finding it took comparing entry prices across a screenshot; the count says
+    it directly.
+    """
+    assert "nSameBar" in path.read_text()
