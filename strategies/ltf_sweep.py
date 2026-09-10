@@ -63,6 +63,16 @@ class LTFSweepConfig(BaseConfig):
     min_risk_points: float = 1.0
     max_risk_points: float = 120.0
 
+    # A day with almost no session bars is broken data, not a trading day, so
+    # the backtest skips it. Live, the same test means something else entirely:
+    # at 10:00 a real session legitimately has 30 bars, and a threshold of 60
+    # would hold every signal back until 10:29 -- measured, a 32-minute delay on
+    # 2026-09-01, whose signal confirmed at 09:57. The limit order would then be
+    # placed at a level the market left half an hour ago. So the live runner
+    # passes 0 and the sanity check stays where it belongs, in the backtest,
+    # where it drops 1 of 3,625 days.
+    min_session_bars: int = 60
+
 
 def liquidity_pools(df15m: pd.DataFrame, lookback: int) -> pd.DataFrame:
     """Rolling extreme of the previous ``lookback`` completed 15m candles.
@@ -120,7 +130,7 @@ def _day_orders(day: pd.DataFrame, config: LTFSweepConfig) -> list[dict]:
     """
     session = day[(day["minutes_from_midnight"] >= config.session_start)
                   & (day["minutes_from_midnight"] <= config.exit_minute)]
-    if len(session) < 60:
+    if len(session) < config.min_session_bars:
         return []
     session = session.reset_index(drop=True)
 

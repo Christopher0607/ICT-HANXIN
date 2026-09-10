@@ -53,6 +53,10 @@ class Config:
     webhook_secret: str
     live: bool
 
+    live_data: bool
+    cutoff_minute: int
+    max_bar_age_s: float
+
     preset: str
     account_start: float
     profit_target: float
@@ -64,7 +68,7 @@ class Config:
     scaling_plan: bool
 
     @classmethod
-    def from_env(cls, live: bool = False) -> "Config":
+    def from_env(cls, live: bool = False, need_webhook: bool = False) -> "Config":
         preset = _env("BRIDGE_PRESET", "Topstep 50K")
         if preset not in PRESETS:
             raise RuntimeError(f"BRIDGE_PRESET={preset!r} is not one of {sorted(PRESETS)}")
@@ -77,8 +81,22 @@ class Config:
             contract_id=_env("BRIDGE_CONTRACT_ID", "CON.F.US.MNQ.Z26"),
             tick_size=_env("BRIDGE_TICK_SIZE", 0.25, float),
             point_value=_env("BRIDGE_POINT_VALUE", 2.0, float),
-            webhook_secret=_env("BRIDGE_WEBHOOK_SECRET"),
+            # The local signal engine has no inbound surface to protect, so the
+            # secret is only required by the webhook server. Demanding one for
+            # bridge.live would teach people to set a dummy, which is how a real
+            # secret ends up being a dummy on the day it matters.
+            webhook_secret=_env("BRIDGE_WEBHOOK_SECRET", MISSING if need_webhook else ""),
             live=live,
+            # Which market-data subscription retrieveBars reads. A practice
+            # account is on the sim feed; asking it for live data returns an
+            # empty bar array rather than an error.
+            live_data=_env("BRIDGE_LIVE_DATA", "0") not in ("0", "false", "False"),
+            # Minutes from ET midnight after which no new order is placed and
+            # any unfilled entry is cancelled. 11:00 ET by default: measured on
+            # 2024-2026, stopping there keeps 74.7% of the P&L for 63.6% of the
+            # trades, and running on to 11:30 is worse, not better.
+            cutoff_minute=_env("BRIDGE_CUTOFF_MINUTE", 11 * 60, int),
+            max_bar_age_s=_env("BRIDGE_MAX_BAR_AGE_S", 150.0, float),
             preset=preset,
             account_start=_env("BRIDGE_ACCOUNT_START", 50000.0, float),
             profit_target=target,

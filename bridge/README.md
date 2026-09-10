@@ -1,39 +1,67 @@
-# Webhook bridge: TradingView → TopstepX
+# bridge: 本機訊號引擎 → TopstepX
 
-## ⚠ 政策：三個階段，只有最後一段禁止
+## 政策（Topstep 2026-09-10 書面答覆，全文在 `docs/topstep_automation_enquiry.md`）
 
-Topstep 的帳戶分三段：**Trading Combine → Express Funded → Live Funded**。
+| 階段 | 自動化 | 透過 TopstepX API |
+|---|---|---|
+| Trading Combine | 可以 | **可以**（須先在 Practice Account 測過） |
+| Express Funded | 可以 | **可以** |
+| Live Funded | 可以 | **不可以** —— API 限制只針對這一段 |
 
-**自動化在 Combine 和 Express Funded 可以，在 Live Funded Account 禁止**
-（同時禁用 VPS / VPN / 遠端伺服器）。
+兩條規則決定了這個資料夾長成現在這樣：
 
-也就是說這座橋在前兩段都用得上，包括開始出金的 Express Funded ——
-只有走到 Live Funded 那一步要改手動。
+- **「All trading activity must originate from your personal device. VPS, VPNs,
+  and remote servers are prohibited. A private server can store data, run
+  research, or log activity, but it cannot place, modify, cancel, or route
+  orders.」** —— 引擎跑在你自己的電腦上，沒有雲端、沒有 VPS、沒有隧道。
+- **「malfunctions or errant trades are not reviewed」** —— 程式出錯的虧損沒有申訴管道。
+  preflight、journal、對帳是這件事唯一的保險。
 
-我查到的是二手來源，2026 年內政策改過幾次。
-**上線前跟客服要一份書面確認，三個階段分開問**，
-特別是「Express Funded 可以用 ProjectX API 自動下單嗎」這一句。
+## 兩條路，走上面那條
 
-這座橋預設 `--dry-run`。
+| | `bridge/live.py`（**預設**） | `bridge/server.py`（舊路徑） |
+|---|---|---|
+| 訊號來源 | 本機跑 `strategies/ltf_sweep.py` | TradingView 警報 |
+| K 棒來源 | TopstepX `/api/History/retrieveBars` | TradingView |
+| 對外連接埠 | **不需要** | 需要（webhook 要進得來） |
+| 每月成本 | $0 | Essential $12.95 + CME 即時行情 $7 |
+| 和回測的關係 | **就是同一份程式** | Pine 是第二份實作，要持續對帳 |
 
----
+`server.py` 留著沒刪，但預設路徑是 `live.py` ——
+TradingView 的警報是從它的伺服器推出來的，要送進本機得再架一層隧道，
+而訊號引擎本來就在本機、K 棒也拿得到，那層隧道沒有存在的理由。
 
-## 上線順序
+**完整上線步驟在 `docs/GO_LIVE.md`。**
 
 ```bash
 # 1. 送真單之前，先驗每一件會失敗的事（不下單）
-uv run python -m bridge.server --preflight
-uv run python -m bridge.server --preflight --offline   # 不連券商，只驗設定
+uv run python -m bridge.live --preflight --offline   # 不連券商，只驗設定
+uv run python -m bridge.live --preflight             # 連上去，驗 K 棒與帳戶
 
-# 2. dry-run 跑一個月，每個決定都寫進 journal
-uv run python -m bridge.server
+# 2. dry-run，每個決定都寫進 journal
+uv run python -m bridge.live --journal data/bridge_journal.jsonl
 
-# 3. 對帳：橋接實際做的 vs 研究引擎說該做的
+# 3. 對帳：引擎實際做的 vs 研究引擎說該做的
 uv run python scripts/reconcile.py --start 2026-09-01 --end 2026-10-01 --risk 1000
 
-# 4. 對得上、政策也確認了，才加 --live
-uv run python -m bridge.server --live
+# 4. 對得上才加 --live
+uv run python -m bridge.live --live --risk 1000
 ```
+
+`--preflight` 會把**真正會送出去的訂單 JSON 印出來**，包含括號單的 tick 距離，
+並且實際打一次 `retrieveBars` —— 合約 ID 錯或 `BRIDGE_LIVE_DATA` 錯的症狀是
+**回空陣列，不是錯誤訊息**，那是上線後最貴又最難看出來的一種錯。
+
+### 一天的作息
+
+引擎在 **09:25–11:00 ET** 之間每分鐘輪詢一次（`BRIDGE_CUTOFF_MINUTE`），
+到點就**取消未成交的掛單**並收工。單子掛出去之後成交與停損停利都由券商管，
+所以電腦只需要在訊號確認的那一刻開著。
+
+**11:00 取消這件事不能省。** 留在券商那裡的限價單會一路掛到時段結束，
+可能在幾小時後、沒人看著的時候成交，而它的停損停利是為一個早就不存在的行情算的。
+實測（2024–2026）11:00 準時取消幾乎不花錢：74.7% 的獲利留下來，
+而放著不管是 76.1%。
 
 `--preflight` 會把**真正會送出去的訂單 JSON 印出來**，包含括號單的 tick 距離 ——
 那是唯一能在下第一張真單之前用肉眼確認的地方。20 點在 0.25 的 tick 上是 80 ticks，
@@ -79,18 +107,22 @@ Trigger 選 **Once Per Bar Close**。
 或者在 Pine 的 `alertTemplate` 裡加一個 `"secret":"..."` 欄位 ——
 TradingView 不是每個方案都能設自訂 header。兩種都是常數時間比對。
 
-## 這座橋做了三件圖表不能被信任去做的事
+## 守衛層在防什麼
 
-**一、重新檢查一次所有 prop firm 規則。**
-圖表可能沒重新載入、input 可能被手動改過、
-知道 URL 的人可以重放 webhook。`bridge/guards.py` 是 Pine 裡
-`propBlock` 的獨立第二份實作，`tests/test_bridge.py` 會**從 Pine 原始碼把數字讀出來比對**
-—— 改了一邊沒改另一邊，測試就會紅，而不是靜悄悄開一個洞。
+`bridge/guards.py` 在訊號和訂單之間強制執行 prop firm 的帳戶規則。
+走 `live.py` 時它防的不再是「被竄改的圖表」，而是**引擎自己**：
+風險參數填錯、餘額比想像中低、同一個設置被算了兩次。
 
-**二、拒絕重放。** TradingView 的警報會重送，
-這裡重複一次就是重複一個部位。用訊號自己的時間戳（不是到達時間）去重。
+規則在 `tradingview/README.md` 的「四條規則」，數字和 Pine 的預設表同一組 ——
+`tests/test_bridge.py` 會**從 Pine 原始碼把數字讀出來比對**，
+改了一邊沒改另一邊測試就會紅，而不是靜悄悄開一個洞。
 
-**三、驗密鑰。** 常數時間比對，不合就 401。
+**重放防護**：`live.py` 用訊號自己的確認時間當識別碼，
+所以同一個設置在後續每一分鐘重跑時只會下單一次。
+`tests/test_live.py` 逐分鐘重播一整天來證明這件事 ——
+已確認的單價格從不改變，否則就會變成 Pine v4 那種沒人取消得掉的孤兒訂單。
+
+**密鑰**（只有 `server.py` 需要）：常數時間比對，不合就 401。
 
 ## 兩個很容易寫錯、而且看起來會像成功的地方
 
@@ -110,13 +142,6 @@ ProjectX 的 `stopLossBracket.ticks` 是距離進場價的 tick 數。
 | `POST /api/Order/place` | 對過官方文件（含 enum 和 bracket 結構） |
 | `POST /api/Account/search` | **沒查證** —— 建議直接設 `TOPSTEPX_ACCOUNT_ID` |
 
-## 上線流程
-
-1. 跟 Topstep 要自動化政策的書面確認
-2. `--dry-run` 跑滿一個月，每天拿 log 和 TradingView 的 Strategy Tester 對帳
-3. 對得起來、政策也允許，才談 `--live`
-4. `--live` 第一週用最小口數
-
 ## 環境變數
 
 | 變數 | 預設 | 說明 |
@@ -125,7 +150,7 @@ ProjectX 的 `stopLossBracket.ticks` 是距離進場價的 tick 數。
 | `TOPSTEPX_API_KEY` | 必填 | 只從環境變數讀 |
 | `TOPSTEPX_ACCOUNT_ID` | 必填（送單時） | |
 | `TOPSTEPX_BASE_URL` | `https://api.topstepx.com` | |
-| `BRIDGE_WEBHOOK_SECRET` | 必填 | |
+| `BRIDGE_WEBHOOK_SECRET` | 只有 `server.py` 需要 | `live.py` 沒有對外接口，不會讀它 |
 | `BRIDGE_CONTRACT_ID` | `CON.F.US.MNQ.Z26` | 換月要改 |
 | `BRIDGE_TICK_SIZE` | `0.25` | |
 | `BRIDGE_POINT_VALUE` | `2.0` | MNQ=2、NQ=20 |
@@ -134,3 +159,6 @@ ProjectX 的 `stopLossBracket.ticks` 是距離進場價的 tick 數。
 | `BRIDGE_SAFETY_MULT` | `1.5` | 距離損失上限少於 N 倍單筆風險就不開新倉 |
 | `BRIDGE_USE_GUARD` | `1` | 設 `0` 關掉損失上限與當日上限的封鎖。**考試階段設 0**（見 `tradingview/README.md` 的兩階段設定），funded 保持 1。獲利目標的停手不受這個開關影響。 |
 | `BRIDGE_SCALING_PLAN` | `0` | 設 `1` 啟用 Express Funded 的 Scaling Plan 口數上限（20/30/50 跟餘額走）。**funded 階段設 1**，考試階段維持 0（考試是固定 50 micros）。 |
+| `BRIDGE_LIVE_DATA` | `0` | `retrieveBars` 要讀哪個行情訂閱。**Practice Account 用 `0`，正式帳戶用 `1`。**填錯回的是空陣列，不是錯誤。 |
+| `BRIDGE_CUTOFF_MINUTE` | `660`（11:00 ET） | 到點停止下新單並取消未成交的掛單 |
+| `BRIDGE_MAX_BAR_AGE_S` | `150` | 最新 K 棒超過這個秒數就停手不下單（擋延遲行情） |

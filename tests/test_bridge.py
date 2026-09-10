@@ -31,7 +31,9 @@ def cfg(**over) -> Config:
     base = dict(
         username="u", api_key="k", base_url="http://example.invalid", account_id=1,
         contract_id="CON.F.US.MNQ.Z26", tick_size=0.25, point_value=2.0,
-        webhook_secret="s3cret-long-enough", live=False, preset="Topstep 50K",
+        webhook_secret="s3cret-long-enough", live=False,
+        live_data=False, cutoff_minute=11 * 60, max_bar_age_s=150.0,
+        preset="Topstep 50K",
         account_start=50000.0, profit_target=3000.0, max_loss_limit=2000.0,
         daily_loss_limit=1000.0, max_contracts=50, safety_mult=1.5,
         use_guard=True, scaling_plan=False,

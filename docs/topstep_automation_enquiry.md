@@ -96,3 +96,54 @@ Thank you,
 會非常有幫助。
 
 謝謝
+
+---
+
+## 官方答覆（2026-09-10）
+
+寄出後收到的回覆，逐字記錄。**官方明言程式出錯造成的交易不受理**，
+所以這份書面依據要留在 repo 裡，不是留在聊天記錄或信箱裡。
+
+> **Trading Combine®**
+> Yes. Automated strategies are allowed, including sending orders through the
+> TopstepX API. You just need to test it first on a Practice Account and accept
+> that malfunctions or errant trades are not reviewed.
+>
+> **Express Funded Account®**
+> Yes. Automated strategies are also allowed here, with the same conditions --
+> no setup support and no coverage for malfunctioning trades.
+>
+> **Live Funded Account®**
+> Yes, automated strategies are allowed, but not through the TopstepX API. The
+> API restriction applies specifically to Live Funded Accounts.
+>
+> **Where the program runs**
+> All trading activity must originate from your personal device. VPS, VPNs, and
+> remote servers are prohibited. A private server can store data, run research,
+> or log activity, but it cannot place, modify, cancel, or route orders.
+>
+> **Semi-automated vs fully automated**
+> The published rules do not define or distinguish "semi-automated" trading. The
+> key requirement is that orders originate from your personal device and follow
+> the platform and prohibited-conduct rules.
+
+### 這改變了什麼
+
+| | 之前的假設 | 官方答覆 |
+|---|---|---|
+| Combine | 二手來源說可以 | **可以**，但**必須先在 Practice Account 測過** |
+| Express Funded | 二手來源互相矛盾 | **可以** |
+| Live Funded | 「禁止自動化」 | 自動化可以，**只是不能透過 API** |
+| 程式跑在哪 | 「禁用 VPS」 | **訂單必須從個人裝置發出**；遠端只能存資料 |
+| 出錯了 | 沒問過 | **不受理**。橋接的 bug 就是自己的損失 |
+
+三個直接後果：
+
+1. **不能用 VPS、不能用雲端、不能用隧道以外的任何代打。**
+   `bridge/live.py` 跑在自己的電腦上，這是規則要求，不是偏好。
+2. **Practice Account 是規則要求的一步**，不只是我建議的保險。
+3. **「出錯不受理」把 preflight / journal / 對帳從好習慣變成唯一的保險。**
+   沒有人會幫忙復原一筆下錯的單。
+
+「semi-automated」官方沒有定義，所以不必再糾結這個詞 ——
+唯一的判準是訂單從個人裝置發出。

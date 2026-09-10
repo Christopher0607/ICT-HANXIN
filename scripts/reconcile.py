@@ -9,8 +9,8 @@ should have happened; nothing else puts them side by side.
 Differences are sorted into three buckets, because they mean very different
 things:
 
-**data**      -- same setup, entry price off by a tick or two. TradingView's
-                 feed is not Databento's, so a handful of these is normal and
+**data**      -- same setup, entry price off by a tick or two. TopstepX's feed
+                 is not Databento's, so a handful of these is normal and
                  expected. Nothing to do.
 **settings**  -- the trade was taken but at the wrong SIZE. That means the
                  risk figures on the chart and in the backtest disagree, so
@@ -20,7 +20,16 @@ things:
                  running different code. Stop.
 
 A blocked or skipped signal is not a difference: the guard is supposed to do
-that, and the journal records why, so those are reported separately.
+that, and the journal records why, so those are reported separately. The same
+goes for a signal missed because the feed went stale -- the engine refusing to
+trade on ten-minute-old bars is it working, not failing.
+
+One difference is expected and is NOT a fault: the research engine can fill
+inside the bar that confirmed the setup, because it assumes an order resting
+from the confirmation instant. ``bridge/live.py`` cannot see that bar until it
+closes. Measured over 2024-2026 that is 14.3% of trades, and it shows up here as
+the engine having a trade the journal does not -- with a ``skipped`` or no entry
+at all. Check the timing before calling it a logic fault.
 """
 
 from __future__ import annotations
@@ -54,15 +63,32 @@ def bridge_trades(rows: list[dict]) -> pd.DataFrame:
     } for r in placed])
 
 
-def engine_trades(start: str, end: str, risk: float) -> pd.DataFrame:
-    """What the research engine says should have been traded."""
+def engine_trades(start: str, end: str, risk: float,
+                  cutoff_minute: int | None = None) -> pd.DataFrame:
+    """What the research engine says should have been traded.
+
+    Run with the live engine's own session rule, not the backtest's. Two things
+    would otherwise show up as logic differences on every single day:
+    ``min_session_bars=0`` (the backtest's 60-bar floor is a data sanity check
+    that would hold every live signal back to 10:29), and the cutoff after which
+    ``bridge/live.py`` stops placing and cancels what has not filled.
+    """
     df1 = D.load("1m")
     bars = df1[(df1.ts >= start) & (df1.ts < end)].reset_index(drop=True)
     if bars.empty:
         return pd.DataFrame(columns=["date", "side", "qty", "entry", "stop", "target"])
-    t = simulate(generate_orders(bars, LTFSweepConfig(), one_per_day=True), bars,
+    t = simulate(generate_orders(bars, LTFSweepConfig(min_session_bars=0),
+                                 one_per_day=True), bars,
                  BacktestConfig(risk_per_trade_usd=risk))
     f = t[t["filled"]]
+    if cutoff_minute is not None and not f.empty:
+        # The engine places until the cutoff and cancels the rest, so a trade
+        # confirmed or filled after it is not one the live run could have had.
+        ny_valid = f["valid_from"].dt.tz_convert(NY)
+        ny_entry = f["entry_ts"].dt.tz_convert(NY)
+        within = ((ny_valid.dt.hour * 60 + ny_valid.dt.minute <= cutoff_minute)
+                  & (ny_entry.dt.hour * 60 + ny_entry.dt.minute <= cutoff_minute))
+        f = f[within]
     if f.empty:
         return pd.DataFrame(columns=["date", "side", "qty", "entry", "stop", "target"])
     return pd.DataFrame({
@@ -116,6 +142,8 @@ def main(argv=None) -> int:
     ap.add_argument("--end", required=True, help="exclusive UTC date")
     ap.add_argument("--risk", type=float, default=1000.0,
                     help="must match the risk the bridge was configured with")
+    ap.add_argument("--cutoff-minute", type=int, default=11 * 60,
+                    help="must match BRIDGE_CUTOFF_MINUTE (default 660 = 11:00 ET)")
     args = ap.parse_args(argv)
 
     rows = Journal(args.journal).read()
@@ -126,12 +154,13 @@ def main(argv=None) -> int:
     bridge = bridge_trades(rows)
     guarded: dict[str, list[str]] = defaultdict(list)
     for r in rows:
-        if r.get("event") in ("blocked", "skipped"):
+        if r.get("event") in ("blocked", "skipped", "stale_feed"):
             day = r.get("day") or str(r.get("ts", ""))[:10]
             guarded[day].append(r.get("reason") or r.get("why") or r["event"])
 
     bridge = bridge[(bridge.date >= args.start) & (bridge.date < args.end)]
-    engine = engine_trades(args.start, args.end, args.risk)
+    engine = engine_trades(args.start, args.end, args.risk,
+                           cutoff_minute=args.cutoff_minute)
 
     print(f"{args.start} -> {args.end}   bridge {len(bridge)} trades, "
           f"engine {len(engine)} trades, {sum(len(v) for v in guarded.values())} "

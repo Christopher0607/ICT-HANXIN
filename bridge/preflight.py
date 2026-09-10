@@ -13,8 +13,14 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+import pandas as pd
+
+from ict import data as D
+from strategies.ltf_sweep import LTFSweepConfig, generate_orders
+
 from .config import PRESETS, Config
 from .guards import scaling_cap
+from .live import day_start
 from .topstepx import Order, TopstepXBroker, order_payload
 
 
@@ -30,19 +36,25 @@ def _mask(value: str) -> str:
     return f"{len(value)} chars ending {value[-4:]}" if len(value) > 8 else "(too short)"
 
 
-def run(cfg: Config, reach_broker: bool = True) -> list[Check]:
-    """Every check, in the order they would bite. Never raises."""
+def run(cfg: Config, reach_broker: bool = True, need_webhook: bool = True) -> list[Check]:
+    """Every check, in the order they would bite. Never raises.
+
+    ``need_webhook`` is false for the local signal engine, which has no inbound
+    surface: demanding a secret it never reads would only teach people to set a
+    dummy one, and a dummy is what you get on the day it matters.
+    """
     out: list[Check] = []
 
     out.append(Check("api key present", bool(cfg.api_key),
                      _mask(cfg.api_key) if cfg.api_key else "TOPSTEPX_API_KEY is empty"))
     out.append(Check("username present", bool(cfg.username), cfg.username or "empty"))
 
-    weak = {"", "changeme", "secret", "password"}
-    out.append(Check("webhook secret set", cfg.webhook_secret.lower() not in weak
-                     and len(cfg.webhook_secret) >= 12,
-                     f"{len(cfg.webhook_secret)} chars"
-                     if cfg.webhook_secret else "BRIDGE_WEBHOOK_SECRET is empty"))
+    if need_webhook:
+        weak = {"", "changeme", "secret", "password"}
+        out.append(Check("webhook secret set", cfg.webhook_secret.lower() not in weak
+                         and len(cfg.webhook_secret) >= 12,
+                         f"{len(cfg.webhook_secret)} chars"
+                         if cfg.webhook_secret else "BRIDGE_WEBHOOK_SECRET is empty"))
 
     out.append(Check("preset known", cfg.preset in PRESETS,
                      f"{cfg.preset}: target ${cfg.profit_target:,.0f}, "
@@ -56,7 +68,15 @@ def run(cfg: Config, reach_broker: bool = True) -> list[Check]:
                      + (" (Express Funded scaling ON)" if cfg.scaling_plan
                         else " (flat evaluation cap)")))
 
-    risk = cfg.max_loss_limit * 0.1
+    out.append(Check("session window", 0 < cfg.cutoff_minute <= 16 * 60,
+                     f"places orders until {cfg.cutoff_minute // 60:02d}:"
+                     f"{cfg.cutoff_minute % 60:02d} ET, then cancels what has not "
+                     "filled"))
+    out.append(Check("data subscription", True,
+                     ("live -- correct for a funded account" if cfg.live_data
+                      else "sim -- correct for a Practice Account. A funded account "
+                           "on this setting gets an empty bar array, not an error")))
+
     out.append(Check("guard posture", True,
                      ("ON -- blocks near the loss limit" if cfg.use_guard
                       else "OFF -- will trade into the loss limit; correct only for "
@@ -115,6 +135,56 @@ def run(cfg: Config, reach_broker: bool = True) -> list[Check]:
         out.append(Check("account id", False,
                          f"could not list accounts ({type(exc).__name__}: {exc}). "
                          "This endpoint is unverified -- confirm the id by hand."))
+
+    out.extend(bar_feed_checks(cfg, broker))
+    return out
+
+
+def bar_feed_checks(cfg: Config, broker) -> list[Check]:
+    """Prove the bar half of the round trip before an order depends on it.
+
+    A wrong ``contractId`` and a wrong ``live`` flag both come back as an empty
+    bar array rather than an error, and a feed stamped at the close rather than
+    the open shifts every signal by one bar while looking perfectly healthy. All
+    three are invisible until they have cost money, and all three are visible
+    here in one request.
+    """
+    out: list[Check] = []
+    now = pd.Timestamp.now(tz="UTC")
+    try:
+        bars = broker.retrieve_bars(day_start(now), now)
+    except Exception as exc:                       # noqa: BLE001
+        return [Check("bar feed", False, f"{type(exc).__name__}: {exc}")]
+
+    if bars.empty:
+        return [Check("bar feed", False,
+                      f"no bars for {cfg.contract_id} on the "
+                      f"{'live' if cfg.live_data else 'sim'} feed. An empty array is "
+                      "what a wrong contract id or a wrong BRIDGE_LIVE_DATA looks "
+                      "like -- neither returns an error")]
+
+    out.append(Check("bar feed", True,
+                     f"{len(bars)} 1-minute bars for {cfg.contract_id}"))
+
+    age = (now - bars["ts"].iloc[-1]).total_seconds()
+    if age < 60:
+        out.append(Check("bar timestamps", False,
+                         f"newest closed bar is {age:.0f}s old. A bar stamped at its "
+                         "open cannot be under a minute old, so this feed stamps at "
+                         "the close -- every signal would sit one bar out of place"))
+    else:
+        out.append(Check("bar timestamps", age <= cfg.max_bar_age_s,
+                         f"newest closed bar is {age / 60:.1f} min old "
+                         f"(limit {cfg.max_bar_age_s / 60:.1f}); stamped at the open, "
+                         "as the engine expects"))
+
+    try:
+        frame = D.add_time_columns(bars)
+        orders = generate_orders(frame, LTFSweepConfig(min_session_bars=0))
+        out.append(Check("signals so far today", True,
+                         f"{len(orders)} setup(s) confirmed on this session's bars"))
+    except Exception as exc:                       # noqa: BLE001
+        out.append(Check("signals so far today", False, f"{type(exc).__name__}: {exc}"))
     return out
 
 

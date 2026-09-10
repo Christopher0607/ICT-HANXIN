@@ -34,9 +34,10 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from .config import Config
-from .guards import REASONS, AccountState, block_reason, clamp_size, scaling_cap
+from .execute import ERROR, clamp_note, place_sized
+from .guards import AccountState, clamp_size
 from .journal import DEFAULT_PATH, Journal
-from .topstepx import BrokerError, DryRunBroker, Order, TopstepXBroker
+from .topstepx import BrokerError, DryRunBroker, TopstepXBroker
 
 log = logging.getLogger("bridge")
 
@@ -105,46 +106,26 @@ class Bridge:
             raise Rejected(f"missing or malformed order fields: {exc}") from exc
 
         day = str(payload.get("time", ""))[:10] or datetime.now(timezone.utc).date().isoformat()
-        self.state.roll_day(day, self.cfg)
 
-        sized = clamp_size(qty, self.cfg, realized=self.state.realized)
-        if sized < 1:
-            self.journal.write("skipped", key=key, why="size clamps to zero", qty=qty)
-            raise Rejected(f"size {qty} clamps to {sized}")
-        if sized != qty:
-            log.warning("size %d over the %d ceiling, cut to %d",
-                        qty, scaling_cap(self.state.realized, self.cfg), sized)
+        note = clamp_note(qty, clamp_size(qty, self.cfg, self.state.realized),
+                          self.state, self.cfg)
+        if note:
+            log.warning("%s", note)
 
-        planned_risk = abs(entry - stop) * self.cfg.point_value * sized
-        reason = block_reason(self.state, planned_risk, self.cfg)
-        if reason:
-            self.journal.write("blocked", key=key, reason=REASONS[reason], code=reason,
-                               qty=sized, entry=entry, stop=stop, target=target,
-                               equity=round(self.state.equity(self.cfg), 2),
-                               floor=round(self.state.mll_floor, 2),
-                               planned_risk=round(planned_risk, 2))
-            raise Rejected(
-                f"{REASONS[reason]} (equity ${self.state.equity(self.cfg):,.0f}, "
-                f"floor ${self.state.mll_floor:,.0f}, this trade risks ${planned_risk:,.0f})"
-            )
+        decision = place_sized(
+            broker=self.broker, journal=self.journal, state=self.state, cfg=self.cfg,
+            side=payload["action"], qty=qty, entry=entry, stop=stop, target=target,
+            day=day, key=key, tag=f"ltf_sweep {day}",
+        )
+        if decision.status == ERROR:
+            raise BrokerError(decision.detail)
+        if not decision.ok:
+            raise Rejected(decision.detail)
 
-        order = Order(side=payload["action"], size=sized, entry=entry, stop=stop,
-                      target=target, tag=f"ltf_sweep {day}")
-        try:
-            result = self.broker.place(order)
-        except BrokerError as exc:
-            self.journal.write("broker_error", key=key, error=str(exc), qty=sized,
-                               entry=entry, stop=stop, target=target)
-            raise
         self.seen.add(key)
-        self.state.trades_today += 1
-        self.journal.write("placed", key=key, side=order.side, qty=sized,
-                           requested_qty=qty, entry=entry, stop=stop, target=target,
-                           planned_risk=round(planned_risk, 2), day=day,
-                           dry_run=bool(result.get("dryRun")), broker=result)
         log.info("placed %s %d @ %.2f stop %.2f target %.2f -> %s",
-                 order.side, order.size, entry, stop, target, result)
-        return {"status": "placed", "order": result}
+                 payload["action"], decision.qty, entry, stop, target, decision.result)
+        return {"status": "placed", "order": decision.result}
 
 
 def make_handler(bridge: Bridge, secret: str):
@@ -213,7 +194,7 @@ def main(argv=None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
-        cfg = Config.from_env(live=args.live)
+        cfg = Config.from_env(live=args.live, need_webhook=True)
     except RuntimeError as exc:
         # Preflight's whole job is to report this kindly rather than traceback.
         print(f"  [FAIL] configuration  {exc}")
