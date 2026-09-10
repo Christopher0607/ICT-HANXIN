@@ -35,6 +35,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from .config import Config
 from .guards import REASONS, AccountState, block_reason, clamp_size, scaling_cap
+from .journal import DEFAULT_PATH, Journal
 from .topstepx import BrokerError, DryRunBroker, Order, TopstepXBroker
 
 log = logging.getLogger("bridge")
@@ -75,21 +76,24 @@ def alert_key(payload: dict) -> str:
 class Bridge:
     """Alert in, order out, with the rules applied in between."""
 
-    def __init__(self, cfg: Config, broker) -> None:
+    def __init__(self, cfg: Config, broker, journal: Journal | None = None) -> None:
         self.cfg = cfg
         self.broker = broker
+        self.journal = journal or Journal(None)
         self.state = AccountState()
         self.seen: set[str] = set()
 
     def handle(self, payload: dict) -> dict:
         key = alert_key(payload)
         if key in self.seen:
+            self.journal.write("duplicate", key=key)
             raise Rejected(f"duplicate alert {key}")
 
         if payload["action"] in EXIT_ACTIONS:
             # Exits ride on the bracket sent with the entry, so there is
             # nothing to place. Recorded so the log shows the round trip.
             self.seen.add(key)
+            self.journal.write("exit_alert", key=key, action=payload["action"])
             return {"status": "noted", "action": payload["action"]}
 
         try:
@@ -105,6 +109,7 @@ class Bridge:
 
         sized = clamp_size(qty, self.cfg, realized=self.state.realized)
         if sized < 1:
+            self.journal.write("skipped", key=key, why="size clamps to zero", qty=qty)
             raise Rejected(f"size {qty} clamps to {sized}")
         if sized != qty:
             log.warning("size %d over the %d ceiling, cut to %d",
@@ -113,6 +118,11 @@ class Bridge:
         planned_risk = abs(entry - stop) * self.cfg.point_value * sized
         reason = block_reason(self.state, planned_risk, self.cfg)
         if reason:
+            self.journal.write("blocked", key=key, reason=REASONS[reason], code=reason,
+                               qty=sized, entry=entry, stop=stop, target=target,
+                               equity=round(self.state.equity(self.cfg), 2),
+                               floor=round(self.state.mll_floor, 2),
+                               planned_risk=round(planned_risk, 2))
             raise Rejected(
                 f"{REASONS[reason]} (equity ${self.state.equity(self.cfg):,.0f}, "
                 f"floor ${self.state.mll_floor:,.0f}, this trade risks ${planned_risk:,.0f})"
@@ -120,9 +130,18 @@ class Bridge:
 
         order = Order(side=payload["action"], size=sized, entry=entry, stop=stop,
                       target=target, tag=f"ltf_sweep {day}")
-        result = self.broker.place(order)
+        try:
+            result = self.broker.place(order)
+        except BrokerError as exc:
+            self.journal.write("broker_error", key=key, error=str(exc), qty=sized,
+                               entry=entry, stop=stop, target=target)
+            raise
         self.seen.add(key)
         self.state.trades_today += 1
+        self.journal.write("placed", key=key, side=order.side, qty=sized,
+                           requested_qty=qty, entry=entry, stop=stop, target=target,
+                           planned_risk=round(planned_risk, 2), day=day,
+                           dry_run=bool(result.get("dryRun")), broker=result)
         log.info("placed %s %d @ %.2f stop %.2f target %.2f -> %s",
                  order.side, order.size, entry, stop, target, result)
         return {"status": "placed", "order": result}
@@ -182,12 +201,31 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--live", action="store_true",
                     help="send real orders; without it nothing leaves this process")
+    ap.add_argument("--preflight", action="store_true",
+                    help="check everything a live order depends on, send nothing, exit")
+    ap.add_argument("--offline", action="store_true",
+                    help="with --preflight, skip the checks that need the broker")
+    ap.add_argument("--journal", default=str(DEFAULT_PATH),
+                    help="JSONL record of every decision; empty string disables it")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8787)
     args = ap.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    cfg = Config.from_env(live=args.live)
+    try:
+        cfg = Config.from_env(live=args.live)
+    except RuntimeError as exc:
+        # Preflight's whole job is to report this kindly rather than traceback.
+        print(f"  [FAIL] configuration  {exc}")
+        print("\nPREFLIGHT FAILED -- configuration incomplete")
+        return 1
+
+    if args.preflight:
+        from . import preflight
+        print(f"preflight: {cfg.preset} on {cfg.base_url}\n")
+        return 0 if preflight.report(
+            preflight.run(cfg, reach_broker=not args.offline)) else 1
+
     broker = TopstepXBroker(cfg) if args.live else DryRunBroker(cfg)
     if args.live:
         log.warning("LIVE: orders will be sent to %s account %s",
@@ -199,8 +237,11 @@ def main(argv=None) -> int:
              cfg.preset, cfg.account_start, cfg.profit_target,
              cfg.max_loss_limit, cfg.max_contracts)
 
-    server = HTTPServer((args.host, args.port), make_handler(Bridge(cfg, broker),
-                                                             cfg.webhook_secret))
+    journal = Journal(args.journal or None)
+    if journal.path:
+        log.info("journalling every decision to %s", journal.path)
+    server = HTTPServer((args.host, args.port),
+                        make_handler(Bridge(cfg, broker, journal), cfg.webhook_secret))
     log.info("listening on http://%s:%d", args.host, args.port)
     try:
         server.serve_forever()

@@ -31,7 +31,7 @@ def cfg(**over) -> Config:
     base = dict(
         username="u", api_key="k", base_url="http://example.invalid", account_id=1,
         contract_id="CON.F.US.MNQ.Z26", tick_size=0.25, point_value=2.0,
-        webhook_secret="s3cret", live=False, preset="Topstep 50K",
+        webhook_secret="s3cret-long-enough", live=False, preset="Topstep 50K",
         account_start=50000.0, profit_target=3000.0, max_loss_limit=2000.0,
         daily_loss_limit=1000.0, max_contracts=50, safety_mult=1.5,
         use_guard=True, scaling_plan=False,
@@ -362,7 +362,7 @@ def post(url: str, body: dict, secret: str | None = None):
 
 def test_the_right_secret_gets_the_order_placed(server):
     url, broker = server
-    status, body = post(url, dict(ALERT), secret="s3cret")
+    status, body = post(url, dict(ALERT), secret="s3cret-long-enough")
     assert status == 200 and body["status"] == "placed"
     assert len(broker.sent) == 1
 
@@ -384,13 +384,98 @@ def test_a_missing_secret_is_rejected(server):
 def test_the_secret_may_travel_in_the_body(server):
     """Not every TradingView plan can set custom headers."""
     url, broker = server
-    status, body = post(url, dict(ALERT, secret="s3cret"))
+    status, body = post(url, dict(ALERT, secret="s3cret-long-enough"))
     assert status == 200 and body["status"] == "placed"
     assert "secret" not in broker.sent[0].get("customTag", "")
 
 
 def test_a_blocked_alert_answers_200_so_tradingview_stops_retrying(server):
     url, broker = server
-    status, body = post(url, dict(ALERT, qty=0), secret="s3cret")
+    status, body = post(url, dict(ALERT, qty=0), secret="s3cret-long-enough")
     assert status == 200 and body["status"] == "skipped"
     assert broker.sent == []
+
+
+# ---------------------------------------------------------------------------
+# preflight
+
+from bridge import preflight   # noqa: E402
+
+
+def names(checks):
+    return {c.name: c for c in checks}
+
+
+def test_preflight_passes_a_complete_configuration():
+    checks = preflight.run(cfg(), reach_broker=False)
+    assert all(c.ok for c in checks), [c for c in checks if not c.ok]
+
+
+def test_preflight_shows_the_bracket_arithmetic_rather_than_trusting_it():
+    """20 points at a 0.25 tick is 80 ticks.
+
+    Passing a price where a tick distance belongs produces a request the API
+    accepts and a stop thousands of ticks away, so this is the one number
+    worth putting in front of a human before the first live order.
+    """
+    c = names(preflight.run(cfg(), reach_broker=False))
+    assert c["bracket ticks"].ok and "80 ticks" in c["bracket ticks"].detail
+    assert '"ticks": 80' in c["sample order payload"].detail
+
+
+@pytest.mark.parametrize("field,value,failing", [
+    ("api_key", "", "api key present"),
+    ("username", "", "username present"),
+    ("webhook_secret", "", "webhook secret set"),
+    ("webhook_secret", "changeme", "webhook secret set"),
+    ("preset", "Nonesuch 10K", "preset known"),
+    ("account_id", None, "bracket ticks"),
+])
+def test_preflight_fails_on_each_missing_piece_individually(field, value, failing):
+    """Only testing the happy path would test nothing."""
+    c = names(preflight.run(cfg(**{field: value}), reach_broker=False))
+    assert not c[failing].ok, f"{field}={value!r} should have failed {failing!r}"
+
+
+def test_preflight_never_prints_the_api_key():
+    detail = names(preflight.run(cfg(api_key="super-secret-key-value"),
+                                 reach_broker=False))["api key present"].detail
+    assert "super-secret-key-value" not in detail
+    assert "alue" in detail, "should still identify which key is loaded"
+
+
+def test_preflight_reports_the_guard_posture_plainly():
+    off = names(preflight.run(cfg(use_guard=False), reach_broker=False))
+    assert "OFF" in off["guard posture"].detail
+    assert "re-buy" in off["guard posture"].detail
+
+
+def test_preflight_reports_the_funded_ceiling_not_the_evaluation_one():
+    scaled = names(preflight.run(cfg(scaling_plan=True), reach_broker=False))
+    assert "20 micros" in scaled["contract ceiling"].detail
+    flat = names(preflight.run(cfg(), reach_broker=False))
+    assert "50 micros" in flat["contract ceiling"].detail
+
+
+def test_the_journal_records_every_outcome_not_only_the_fills(tmp_path):
+    from bridge.journal import Journal
+    c = cfg()
+    j = Journal(tmp_path / "j.jsonl")
+    b = Bridge(c, DryRunBroker(c), j)
+    b.handle(dict(ALERT))                                  # placed
+    with pytest.raises(Rejected):
+        b.handle(dict(ALERT))                              # duplicate
+    b.handle(dict(ALERT, action="exit_target", time="2026-08-31T15:00:00Z"))
+    events = [r["event"] for r in j.read()]
+    assert events == ["placed", "duplicate", "exit_alert"]
+
+
+def test_a_blocked_signal_is_journalled_with_its_reason(tmp_path):
+    from bridge.journal import Journal
+    c = cfg(max_loss_limit=200.0)
+    j = Journal(tmp_path / "j.jsonl")
+    with pytest.raises(Rejected):
+        Bridge(c, DryRunBroker(c), j).handle(dict(ALERT))
+    rows = j.read()
+    assert rows[0]["event"] == "blocked"
+    assert "loss limit" in rows[0]["reason"]

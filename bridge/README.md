@@ -18,6 +18,42 @@ Topstep 的帳戶分三段：**Trading Combine → Express Funded → Live Funde
 
 ---
 
+## 上線順序
+
+```bash
+# 1. 送真單之前，先驗每一件會失敗的事（不下單）
+uv run python -m bridge.server --preflight
+uv run python -m bridge.server --preflight --offline   # 不連券商，只驗設定
+
+# 2. dry-run 跑一個月，每個決定都寫進 journal
+uv run python -m bridge.server
+
+# 3. 對帳：橋接實際做的 vs 研究引擎說該做的
+uv run python scripts/reconcile.py --start 2026-09-01 --end 2026-10-01 --risk 1000
+
+# 4. 對得上、政策也確認了，才加 --live
+uv run python -m bridge.server --live
+```
+
+`--preflight` 會把**真正會送出去的訂單 JSON 印出來**，包含括號單的 tick 距離 ——
+那是唯一能在下第一張真單之前用肉眼確認的地方。20 點在 0.25 的 tick 上是 80 ticks，
+不是 20，也不是 20.00。填錯會得到一張 API 接受、停損在幾千 tick 外的單。
+
+`--journal`（預設 `data/bridge_journal.jsonl`）每個決定寫一行 ——
+**包含沒有下單的那些**。「上個月守衛擋掉了 14 個訊號」這種事在對帳單上看不出來，
+在這裡一眼就看到。
+
+`scripts/reconcile.py` 把差異分成三類，因為它們的意思完全不同：
+
+| 類別 | 意思 | 該做什麼 |
+|---|---|---|
+| **data** | 進場價差一兩檔 | TradingView 的資料源不是 Databento，正常，不用管 |
+| **settings** | **口數不一樣** | 風險設定兩邊不一致，**每一筆倉位都算錯了。停。** |
+| **logic** | 一邊有單另一邊沒有，且 journal 沒有記錄原因 | 兩邊跑的不是同一份東西。**停。** |
+
+守衛擋掉的訊號不算差異 —— 那是守衛在做它該做的事，journal 有記原因，
+會另外列出來。
+
 ## 跑起來
 
 ```bash

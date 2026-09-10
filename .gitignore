@@ -5,3 +5,4 @@ __pycache__/
 *.egg-info/
 data/processed/
 trades*.csv
+data/bridge_journal.jsonl
