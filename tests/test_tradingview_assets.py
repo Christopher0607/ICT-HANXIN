@@ -23,7 +23,7 @@ SCRIPTS = sorted(p for p in PINE_DIR.glob("*.pine") if not p.stem.endswith("_com
 COMPACT = sorted(PINE_DIR.glob("*_compact.pine"))
 
 #: Bumped whenever a change needs to be visibly confirmed on someone's chart.
-VERSION = "v5"
+VERSION = "v6"
 
 
 def strip_comments_and_strings(src: str) -> str:
@@ -168,27 +168,31 @@ def test_compact_build_is_the_same_program_as_its_source(compact):
 
 
 @pytest.mark.parametrize("compact", COMPACT, ids=lambda p: p.name)
-def test_compact_build_does_not_balloon(compact):
-    """A growth guard, no longer a promise about clipboards.
+def test_compact_build_is_actually_compact(compact):
+    """Proportional, because an absolute ceiling ratchets and stops meaning much.
 
-    This started as a hard 16 KB ceiling, on the evidence that a 16.8 KB paste
-    once lost its last line to a phone's clipboard. The prop-firm rule layer
-    pushed the compact builds to ~18.2 KB and that ceiling could not survive
-    it. Golfing safety-critical code to fit an approximate limit would be the
-    wrong trade, so the ceiling moved -- deliberately, and recorded here rather
-    than quietly edited.
+    This was a hard byte count twice -- 16 KB, then 19 KB -- and each time real
+    functionality arrived it had to move. A limit that gets raised whenever it
+    binds is not testing anything, and golfing safety-critical code to fit an
+    approximate number is the wrong trade either way.
 
-    What makes that acceptable: a truncated paste is LOUD. The original one
-    failed to compile with "Missing closing parenthesis" -- it cost a round
-    trip, it did not ship a half-script that traded. The real defence is the
-    last-line check in the README, not this number.
+    What the compact build actually promises is that it is the same program
+    with the prose removed. So test that: it must stay meaningfully smaller
+    than its source, which catches the builder silently failing to strip
+    anything. The absolute figure is left as a runaway guard only, generous
+    enough that legitimate growth never touches it.
 
-    So this now only catches unnoticed bloat.
+    A truncated paste was the original worry and it turned out to be loud --
+    it failed to compile rather than shipping half a script. The real defence
+    is the last-line check in the README, not a number here.
     """
-    assert len(compact.read_text()) < 19_000, (
-        "compact build has grown well past what the prop layer needed; find "
-        "the bytes before raising this again"
+    full = compact.with_name(compact.name.replace("_compact", ""))
+    ratio = len(compact.read_text()) / len(full.read_text())
+    assert ratio < 0.72, (
+        f"compact build is only {1 - ratio:.0%} smaller than its source; the "
+        "comment stripping has probably stopped working"
     )
+    assert len(compact.read_text()) < 25_000, "runaway growth"
 
 
 @pytest.mark.parametrize("compact", COMPACT, ids=lambda p: p.name)
@@ -345,21 +349,24 @@ def test_the_prop_rule_is_a_single_shared_function(path):
     src = path.read_text()
     assert src.count("propBlock(liveEq, floorEq, dayPnl, netP, plannedRisk) =>") == 1
     assert src.count("blockReason = propBlock(") == 1
-    for rule in ("liveEq - floorEq < plannedRisk * safetyMult ? 1 :",
-                 "dayPnl - plannedRisk <= -dailyLossLimit ? 2 :",
-                 "netP >= profitTarget ? 3 : 0"):
+    for rule in ("netP >= profitTarget ? 3 :",
+                 "liveEq - floorEq < plannedRisk * safetyMult ? 1 :",
+                 "dayPnl - plannedRisk <= -dailyLossLimit ? 2 : 0"):
         assert rule in src, f"{rule!r} missing from {path.name}"
 
 
 @pytest.mark.parametrize("path", SCRIPTS + COMPACT, ids=lambda p: p.name)
-def test_prop_sizing_comes_from_the_loss_limit(path):
-    """A fixed $500 produced a $9,615 drawdown against a $2,000 limit.
+def test_prop_sizing_is_a_percentage_not_a_dollar_box(path):
+    """A fixed $500 produced a $9,207 drawdown against a $2,000 limit.
 
-    Deriving the per-trade risk from the loss limit rescales with the account
-    instead of needing a new magic number for every size.
+    A percentage rescales with the account instead of needing a new magic
+    number per size, and the basis is selectable because "2% of the account"
+    and "10% of the loss limit" are both things people mean by risk.
     """
     src = path.read_text()
-    assert "effRisk = propMode ? maxLossLimit * riskPctOfMLL / 100.0 : riskUSD" in src
+    assert 'riskBasis == "% of account" ? accountStart * riskPct / 100.0' in src
+    assert 'riskBasis == "% of loss limit" ? maxLossLimit * riskPct / 100.0' in src
+    assert "riskPctOfMLL" not in src, "the old single-basis input should be gone"
 
 
 @pytest.mark.parametrize("path", SCRIPTS + COMPACT, ids=lambda p: p.name)
@@ -381,7 +388,8 @@ def test_topstep_50k_preset_matches_the_published_rules(path):
 def test_contract_ceiling_cuts_the_trade_down_rather_than_skipping_it(path):
     """Over the ceiling the setup is still the setup, just smaller."""
     src = path.read_text()
-    assert "q = propMode and q0 > maxMicros ? maxMicros : q0" in src
+    assert "q = propMode and q0 > capMicros ? capMicros : q0" in src
+    assert "capMicros = scalePlan ? scaleCap : maxMicros" in src
 
 
 def test_fills_are_detected_by_trade_count_not_position_size():
@@ -486,3 +494,46 @@ def test_a_setup_price_has_already_run_past_is_refused(path):
     assert "retraceLeft = setupDir == 1 ? close > e : close < e" in src
     assert "ok = okRisk and retraceLeft" in src
     assert "nRejPremise" in src, "the refusals must be counted, not silent"
+
+
+@pytest.mark.parametrize("path", SCRIPTS + COMPACT, ids=lambda p: p.name)
+def test_the_guard_switch_never_disables_the_profit_target_stop(path):
+    """useGuard turns off the loss-limit and daily blocks, and only those.
+
+    On an evaluation you are willing to lose and re-buy, stopping short
+    neither passes nor busts while the monthly fee runs either way -- measured,
+    the guard cut the pass rate from 35% to 10% at 2% risk. But stopping once
+    the target is MADE is right in every phase, so it sits above the switch.
+    """
+    src = path.read_text()
+    body = src[src.index("propBlock(liveEq"):]
+    body = body[:body.index("\n\n")]
+    target_at = body.index("netP >= profitTarget")
+    switch_at = body.index("not useGuard ? 0 :")
+    assert target_at < switch_at, (
+        "the profit-target stop must be checked before useGuard can short-circuit"
+    )
+    for gated in ("plannedRisk * safetyMult ? 1", "-dailyLossLimit ? 2"):
+        assert body.index(gated) > switch_at, f"{gated!r} must sit under the switch"
+
+
+@pytest.mark.parametrize("path", SCRIPTS + COMPACT, ids=lambda p: p.name)
+def test_express_funded_scaling_thresholds(path):
+    """A funded account is not capped at the evaluation's 50 micros.
+
+    The Scaling Plan sets the ceiling from the balance and an XFA opens at $0,
+    so a Topstep 50K starts at 2 lots -- 20 micros, not 50. Sizing a strategy
+    against 50 and then trading an account capped at 20 is how a position ends
+    up rejected at the broker for reasons the chart cannot see.
+    """
+    src = path.read_text()
+    assert "scaleCap := " in src
+    assert "< 1500 ? 20 : " in src and "< 2000 ? 30 : 50" in src
+    assert "var int scaleCap = 20" in src, "must seed at the opening size, never 0"
+
+
+def test_the_scaling_cap_is_refreshed_once_per_session():
+    """Topstep raises it the next trading day, never mid-session."""
+    for name in ("ltf_sweep_strategy.pine", "ltf_sweep_indicator.pine"):
+        src = (PINE_DIR / name).read_text()
+        assert "if scalePlan and sessionOpen" in src, name

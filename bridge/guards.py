@@ -71,18 +71,41 @@ class AccountState:
 
 
 def block_reason(state: AccountState, planned_risk: float, cfg: Config) -> int:
-    """0 to trade, otherwise why not. Same codes as the Pine ``propBlock``."""
+    """0 to trade, otherwise why not. Same codes and order as Pine ``propBlock``.
+
+    The target check sits above ``use_guard`` deliberately: stopping once the
+    target is MADE is right in every phase, while the loss-limit and daily
+    blocks are the ones worth switching off on an evaluation you would re-buy.
+    Stopping short of a target neither passes nor busts, and the monthly fee
+    runs either way -- measured, the guard cut the pass rate from 35% to 10%
+    at 2% risk.
+    """
     state.start(cfg)
+    if state.realized >= cfg.profit_target:
+        return BLOCK_TARGET_MADE
+    if not cfg.use_guard:
+        return OK
     equity = state.equity(cfg)
     if equity - state.mll_floor < planned_risk * cfg.safety_mult:
         return BLOCK_LOSS_LIMIT
     if (equity - state.day_open_equity) - planned_risk <= -cfg.daily_loss_limit:
         return BLOCK_DAILY_CAP
-    if state.realized >= cfg.profit_target:
-        return BLOCK_TARGET_MADE
     return OK
 
 
-def clamp_size(qty: int, cfg: Config) -> int:
+def scaling_cap(realized: float, cfg: Config) -> int:
+    """Contract ceiling, following the Express Funded scaling plan when on.
+
+    A funded account is not capped at the evaluation's 50 micros: the plan sets
+    the ceiling from the balance and an XFA opens at $0, so a Topstep 50K
+    starts at 2 lots -- 20 micros. Sizing against 50 and trading an account
+    capped at 20 is how orders get rejected for reasons the chart cannot see.
+    """
+    if not cfg.scaling_plan:
+        return cfg.max_contracts
+    return 20 if realized < 1500 else (30 if realized < 2000 else 50)
+
+
+def clamp_size(qty: int, cfg: Config, realized: float = 0.0) -> int:
     """Cut an oversized position down to the ceiling rather than skipping it."""
-    return max(0, min(int(qty), cfg.max_contracts))
+    return max(0, min(int(qty), scaling_cap(realized, cfg)))

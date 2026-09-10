@@ -19,7 +19,7 @@ import pytest
 
 from bridge.config import PRESETS, Config
 from bridge.guards import (BLOCK_DAILY_CAP, BLOCK_LOSS_LIMIT, BLOCK_TARGET_MADE, OK,
-                           AccountState, block_reason, clamp_size)
+                           AccountState, block_reason, clamp_size, scaling_cap)
 from bridge.server import Bridge, Rejected, alert_key, make_handler, parse_alert
 from bridge.topstepx import (SIDE_BUY, SIDE_SELL, BrokerError, DryRunBroker, Order,
                              bracket_ticks, order_payload)
@@ -34,6 +34,7 @@ def cfg(**over) -> Config:
         webhook_secret="s3cret", live=False, preset="Topstep 50K",
         account_start=50000.0, profit_target=3000.0, max_loss_limit=2000.0,
         daily_loss_limit=1000.0, max_contracts=50, safety_mult=1.5,
+        use_guard=True, scaling_plan=False,
     )
     base.update(over)
     return Config(**base)
@@ -72,8 +73,50 @@ def test_preset_table_matches_the_pine_scripts():
 def test_pine_and_bridge_use_the_same_block_reason_codes():
     src = PINE.read_text()
     assert "plannedRisk * safetyMult ? 1 :" in src and BLOCK_LOSS_LIMIT == 1
-    assert "-dailyLossLimit ? 2 :" in src and BLOCK_DAILY_CAP == 2
-    assert "netP >= profitTarget ? 3 : 0" in src and BLOCK_TARGET_MADE == 3
+    assert "-dailyLossLimit ? 2 : 0" in src and BLOCK_DAILY_CAP == 2
+    assert "netP >= profitTarget ? 3 :" in src and BLOCK_TARGET_MADE == 3
+
+
+def test_pine_and_bridge_check_the_reasons_in_the_same_order():
+    """Order is part of the rule once a switch can short-circuit it.
+
+    Both check the profit target first and above the guard switch, so turning
+    the guard off for a re-buyable evaluation never also disables "stop once
+    you have passed".
+    """
+    src = PINE.read_text()
+    pine = src[src.index("propBlock(liveEq"):]
+    pine = pine[:pine.index("\n\n")]
+    assert pine.index("netP >= profitTarget") < pine.index("not useGuard ? 0 :")
+
+    import inspect
+    from bridge import guards
+    py = inspect.getsource(guards.block_reason)
+    assert py.index("state.realized >= cfg.profit_target") < py.index("if not cfg.use_guard")
+
+
+def test_the_guard_switch_turns_off_the_loss_blocks_but_not_the_target():
+    c = cfg(use_guard=False)
+    st = AccountState()
+    st.roll_day("2026-09-01", c)
+    st.open_pnl = -1990.0                      # right on top of the floor
+    assert block_reason(st, 500.0, c) == OK, "loss-limit block must be off"
+    st.open_pnl = 0.0
+    st.realized = 3000.0
+    assert block_reason(st, 200.0, c) == BLOCK_TARGET_MADE, "target stop stays on"
+
+
+def test_the_express_funded_scaling_cap_follows_the_balance():
+    """A funded 50K opens at 2 lots, not the evaluation's 5."""
+    c = cfg(scaling_plan=True)
+    assert scaling_cap(0.0, c) == 20
+    assert scaling_cap(1499.0, c) == 20
+    assert scaling_cap(1500.0, c) == 30
+    assert scaling_cap(2000.0, c) == 50
+    assert clamp_size(40, c, realized=0.0) == 20
+    assert clamp_size(40, c, realized=2000.0) == 40
+    # off by default, so an evaluation keeps the flat ceiling
+    assert scaling_cap(0.0, cfg()) == 50
 
 
 # --------------------------------------------------------------------------

@@ -5,7 +5,7 @@
 // CLOSE and set alerts to "Once Per Bar Close". Keep this file pure ASCII.
 // Evaluate on BAR CLOSE. Set alerts to "Once Per Bar Close".
 
-indicator("LTF Sweep - alerts", "LTF Sweep (alerts) v5", overlay = true, max_boxes_count = 200, max_lines_count = 300, max_labels_count = 300)
+indicator("LTF Sweep - alerts", "LTF Sweep (alerts) v6", overlay = true, max_boxes_count = 200, max_lines_count = 300, max_labels_count = 300)
 
 grpS = "Setup"
 lookbackCandles = input.int(4,    "15m candles forming the pool", minval=1, maxval=20, group=grpS)
@@ -42,7 +42,10 @@ grpP = "Prop firm"
 propMode     = input.bool(false, "Enforce prop firm rules", group=grpP)
 firmPreset   = input.string("Topstep 50K", "Account", group=grpP, options=["Topstep 50K", "Topstep 100K", "Topstep 150K", "Apex 50K EOD", "Apex 100K EOD", "Custom"])
 accountStart = input.float(50000, "Account starting balance", minval=1, group=grpP)
-riskPctOfMLL = input.float(10, "Risk per trade, % of the loss limit", minval=1, maxval=50, group=grpP)
+riskBasis    = input.string("% of account", "Risk per trade, measured against", group=grpP, options=["% of account", "% of loss limit", "Fixed $"])
+riskPct      = input.float(2.0, "Risk per trade (%)", minval=0.05, maxval=10, step=0.05, group=grpP)
+useGuard     = input.bool(true, "Block new trades near the loss limit", group=grpP)
+scalePlan    = input.bool(false, "Express Funded scaling plan", group=grpP)
 safetyMult   = input.float(1.5, "Refuse to open within N x risk of the limit", minval=1.0, step=0.25, group=grpP)
 cTarget      = input.float(3000, "Custom: profit target",       group=grpP)
 cMaxLoss     = input.float(2000, "Custom: maximum loss limit",  group=grpP)
@@ -55,10 +58,12 @@ var float maxLossLimit   = pIdx < 0 ? cMaxLoss   : array.get(array.from(2000., 3
 var float dailyLossLimit = pIdx < 0 ? cDailyLoss : array.get(array.from(1000., 2000., 3000., 1e9, 1e9), pIdx)
 var int   maxMicros      = pIdx < 0 ? cMaxMicros : int(array.get(array.from(50., 100., 150., 20., 40.), pIdx))
 
-effRisk = propMode ? maxLossLimit * riskPctOfMLL / 100.0 : riskUSD
+effRisk = not propMode ? riskUSD : riskBasis == "% of account" ? accountStart * riskPct / 100.0 : riskBasis == "% of loss limit" ? maxLossLimit * riskPct / 100.0 : riskUSD
+
+var int scaleCap = 20
 
 propBlock(liveEq, floorEq, dayPnl, netP, plannedRisk) =>
-    not propMode ? 0 : liveEq - floorEq < plannedRisk * safetyMult ? 1 : dayPnl - plannedRisk <= -dailyLossLimit ? 2 : netP >= profitTarget ? 3 : 0
+    not propMode ? 0 : netP >= profitTarget ? 3 : not useGuard ? 0 : liveEq - floorEq < plannedRisk * safetyMult ? 1 : dayPnl - plannedRisk <= -dailyLossLimit ? 2 : 0
 
 grpD = "Diagnostics"
 showDiag = input.bool(true, "Diagnostic counters in the table", group=grpD)
@@ -85,7 +90,7 @@ px(v) => str.tostring(v, format.mintick)
 
 // screenshot -- says which build is actually running. Two round trips went on
 if barstate.isfirst and debugLog
-    log.info("LTF Sweep v5")
+    log.info("LTF Sweep v6")
 
 inSweepWin = not na(time(timeframe.period, sweepWindow,  tz))
 inEntryWin = not na(time(timeframe.period, entryWindow,  tz))
@@ -217,8 +222,9 @@ if confirmed
     retraceLeft = setupDir == 1 ? close > e : close < e
     ok = okRisk and retraceLeft
     q0 = ok ? int(math.floor(effRisk / (r * pointValue))) : 0
-    q = propMode and q0 > maxMicros ? maxMicros : q0
-    if propMode and q0 > maxMicros
+    capMicros = scalePlan ? scaleCap : maxMicros
+    q = propMode and q0 > capMicros ? capMicros : q0
+    if propMode and q0 > capMicros
         nClampQty += 1
     if ok and q >= 1
         entryPx  := e
@@ -269,6 +275,8 @@ if sessionOpen
 if sessionEnd
     mllFloor := math.max(mllFloor, accountStart + simNet - maxLossLimit)
 dayPnl      = propEquity - dayOpenEq
+if scalePlan and sessionOpen
+    scaleCap := simNet < 1500 ? 20 : simNet < 2000 ? 30 : 50
 plannedRisk = riskPts * pointValue * qty
 blockReason = propBlock(propEquity, mllFloor, dayPnl, simNet, plannedRisk)
 

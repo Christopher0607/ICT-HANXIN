@@ -60,6 +60,8 @@ class Config:
     daily_loss_limit: float
     max_contracts: int
     safety_mult: float
+    use_guard: bool
+    scaling_plan: bool
 
     @classmethod
     def from_env(cls, live: bool = False) -> "Config":
@@ -84,4 +86,9 @@ class Config:
             daily_loss_limit=daily,
             max_contracts=max_ct,
             safety_mult=_env("BRIDGE_SAFETY_MULT", 1.5, float),
+            # Both default to the funded-account posture, which is the one
+            # where being wrong is expensive. An evaluation you would re-buy
+            # is the deliberate exception, not the default.
+            use_guard=_env("BRIDGE_USE_GUARD", "1") not in ("0", "false", "False"),
+            scaling_plan=_env("BRIDGE_SCALING_PLAN", "0") not in ("0", "false", "False"),
         )

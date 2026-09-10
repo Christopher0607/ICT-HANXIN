@@ -1,18 +1,20 @@
 # Webhook bridge: TradingView → TopstepX
 
-## ⚠ 先確認政策，再上線
+## ⚠ 政策：三個階段，只有最後一段禁止
 
-**Topstep 在 Live Funded Account 禁止透過 ProjectX API 自動交易，
-而且禁用 VPS / VPN / 遠端伺服器。**
-Apex 的來源互相矛盾，最清楚的說法同樣是「評估階段可以、funded 禁止」。
+Topstep 的帳戶分三段：**Trading Combine → Express Funded → Live Funded**。
 
-意思是：**你能自動化的是評估階段，賺錢那一段可能要手動。**
-而且**把這支程式跑在雲端主機上，本身就可能違反 Topstep 的規則**。
+**自動化在 Combine 和 Express Funded 可以，在 Live Funded Account 禁止**
+（同時禁用 VPS / VPN / 遠端伺服器）。
 
-我查到的都是二手評測站（不少帶聯盟行銷），2026 年內政策改過好幾次。
-**先跟客服要書面確認，Combine 和 Funded 分開問。**
+也就是說這座橋在前兩段都用得上，包括開始出金的 Express Funded ——
+只有走到 Live Funded 那一步要改手動。
 
-這座橋預設 `--dry-run`，就是為了讓你在等答覆的期間也能把管線跑通、對帳。
+我查到的是二手來源，2026 年內政策改過幾次。
+**上線前跟客服要一份書面確認，三個階段分開問**，
+特別是「Express Funded 可以用 ProjectX API 自動下單嗎」這一句。
+
+這座橋預設 `--dry-run`。
 
 ---
 
@@ -94,3 +96,5 @@ ProjectX 的 `stopLossBracket.ticks` 是距離進場價的 tick 數。
 | `BRIDGE_PRESET` | `Topstep 50K` | 和 Pine 的預設表同一組數字 |
 | `BRIDGE_ACCOUNT_START` | `50000` | |
 | `BRIDGE_SAFETY_MULT` | `1.5` | 距離損失上限少於 N 倍單筆風險就不開新倉 |
+| `BRIDGE_USE_GUARD` | `1` | 設 `0` 關掉損失上限與當日上限的封鎖。**考試階段設 0**（見 `tradingview/README.md` 的兩階段設定），funded 保持 1。獲利目標的停手不受這個開關影響。 |
+| `BRIDGE_SCALING_PLAN` | `0` | 設 `1` 啟用 Express Funded 的 Scaling Plan 口數上限（20/30/50 跟餘額走）。**funded 階段設 1**，考試階段維持 0（考試是固定 50 micros）。 |

@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from .config import Config
-from .guards import REASONS, AccountState, block_reason, clamp_size
+from .guards import REASONS, AccountState, block_reason, clamp_size, scaling_cap
 from .topstepx import BrokerError, DryRunBroker, Order, TopstepXBroker
 
 log = logging.getLogger("bridge")
@@ -103,12 +103,12 @@ class Bridge:
         day = str(payload.get("time", ""))[:10] or datetime.now(timezone.utc).date().isoformat()
         self.state.roll_day(day, self.cfg)
 
-        sized = clamp_size(qty, self.cfg)
+        sized = clamp_size(qty, self.cfg, realized=self.state.realized)
         if sized < 1:
             raise Rejected(f"size {qty} clamps to {sized}")
         if sized != qty:
             log.warning("size %d over the %d ceiling, cut to %d",
-                        qty, self.cfg.max_contracts, sized)
+                        qty, scaling_cap(self.state.realized, self.cfg), sized)
 
         planned_risk = abs(entry - stop) * self.cfg.point_value * sized
         reason = block_reason(self.state, planned_risk, self.cfg)

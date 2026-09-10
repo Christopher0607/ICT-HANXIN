@@ -19,7 +19,7 @@
 // Evaluate on BAR CLOSE. Set alerts to "Once Per Bar Close".
 // =============================================================================
 
-indicator("LTF Sweep - alerts", "LTF Sweep (alerts) v5", overlay = true, max_boxes_count = 200, max_lines_count = 300, max_labels_count = 300)
+indicator("LTF Sweep - alerts", "LTF Sweep (alerts) v6", overlay = true, max_boxes_count = 200, max_lines_count = 300, max_labels_count = 300)
 
 // -- inputs -------------------------------------------------------------------
 grpS = "Setup"
@@ -63,8 +63,15 @@ firmPreset   = input.string("Topstep 50K", "Account", group=grpP,
      options=["Topstep 50K", "Topstep 100K", "Topstep 150K", "Apex 50K EOD", "Apex 100K EOD", "Custom"],
      tooltip="Topstep figures are from Topstep's own rule pages. The Apex rows came from third-party summaries after the 4.0 change and are NOT verified -- check them against Apex before trusting them, or use Custom.")
 accountStart = input.float(50000, "Account starting balance", minval=1, group=grpP)
-riskPctOfMLL = input.float(10, "Risk per trade, % of the loss limit", minval=1, maxval=50, group=grpP,
-     tooltip="Replaces the Risk-per-trade dollar figure while prop mode is on. 10% of a $2,000 limit is $200, which is where the pass rate peaked in testing: below it too many setups cannot afford one contract, above it the drawdown eats the limit.")
+riskBasis    = input.string("% of account", "Risk per trade, measured against", group=grpP,
+     options=["% of account", "% of loss limit", "Fixed $"],
+     tooltip="Replaces the Risk-per-trade dollar figure while prop mode is on.")
+riskPct      = input.float(2.0, "Risk per trade (%)", minval=0.05, maxval=10, step=0.05, group=grpP,
+     tooltip="On a $50,000 Combine, 2% is $1,000 a trade. Counter-intuitively that is the cheapest way to get FUNDED when you are willing to re-buy a failed evaluation: it passes only 35% of the time, but an attempt resolves in about nine trading days, so the expected cost to a first pass is roughly one month of fees against nine months at 0.4%. Once funded, drop it -- a funded account cannot be re-bought for $85.")
+useGuard     = input.bool(true, "Block new trades near the loss limit", group=grpP,
+     tooltip="Turn OFF for an evaluation you are willing to lose and re-buy: stopping short neither passes nor busts, and the monthly fee runs either way. Measured, it cut the pass rate from 35% to 10% at 2% risk. Turn ON once funded.")
+scalePlan    = input.bool(false, "Express Funded scaling plan", group=grpP,
+     tooltip="An Express Funded Account is not capped at the evaluation's 50 micros: the Scaling Plan sets the ceiling from the balance, and an XFA opens at $0. For a Topstep 50K that is 2 lots (20 micros) under $1,500, 3 lots from $1,500, 5 lots from $2,000. Topstep raises it the next trading day, never mid-session, so this reads the balance at the session open and holds it for the day.")
 safetyMult   = input.float(1.5, "Refuse to open within N x risk of the limit", minval=1.0, step=0.25, group=grpP)
 cTarget      = input.float(3000, "Custom: profit target",       group=grpP)
 cMaxLoss     = input.float(2000, "Custom: maximum loss limit",  group=grpP)
@@ -80,19 +87,27 @@ var float maxLossLimit   = pIdx < 0 ? cMaxLoss   : array.get(array.from(2000., 3
 var float dailyLossLimit = pIdx < 0 ? cDailyLoss : array.get(array.from(1000., 2000., 3000., 1e9, 1e9), pIdx)
 var int   maxMicros      = pIdx < 0 ? cMaxMicros : int(array.get(array.from(50., 100., 150., 20., 40.), pIdx))
 
-// Sizing while prop mode is on comes from the loss limit, not the dollar box:
-// a fixed $500 produced a $9,615 drawdown out of sample, nearly five times a
-// $2,000 limit. Deriving it from the limit rescales automatically per account.
-effRisk = propMode ? maxLossLimit * riskPctOfMLL / 100.0 : riskUSD
+// Sizing while prop mode is on is a percentage, not the dollar box, so it
+// rescales with the account instead of needing a new number per size.
+effRisk = not propMode ? riskUSD : riskBasis == "% of account" ? accountStart * riskPct / 100.0 : riskBasis == "% of loss limit" ? maxLossLimit * riskPct / 100.0 : riskUSD
+
+// The contract ceiling. Fixed during an evaluation; under the Express Funded
+// scaling plan it follows the balance and is refreshed once per session (see
+// the scalePlan tooltip). Seeded at the XFA opening size so it is never zero.
+var int scaleCap = 20
 
 // Why a trade must not be opened, or 0 to go ahead. Kept as one pure function
 // in the shared core so the strategy and the indicator cannot drift apart on
 // the rule; only the equity they feed it differs.
+// Reason 3 is checked first and is NOT part of useGuard: stopping once the
+// target is made is right in every phase, while the loss-limit and daily-cap
+// blocks are the ones worth switching off on an account you would re-buy.
 propBlock(liveEq, floorEq, dayPnl, netP, plannedRisk) =>
     not propMode ? 0 :
+         netP >= profitTarget ? 3 :
+         not useGuard ? 0 :
          liveEq - floorEq < plannedRisk * safetyMult ? 1 :
-         dayPnl - plannedRisk <= -dailyLossLimit ? 2 :
-         netP >= profitTarget ? 3 : 0
+         dayPnl - plannedRisk <= -dailyLossLimit ? 2 : 0
 
 grpD = "Diagnostics"
 showDiag = input.bool(true, "Diagnostic counters in the table", group=grpD)
@@ -134,7 +149,7 @@ px(v) => str.tostring(v, format.mintick)
 // screenshot -- says which build is actually running. Two round trips went on
 // "is the new script loaded?"; this answers it without opening anything.
 if barstate.isfirst and debugLog
-    log.info("LTF Sweep v5")
+    log.info("LTF Sweep v6")
 
 // -- session state ------------------------------------------------------------
 inSweepWin = not na(time(timeframe.period, sweepWindow,  tz))
@@ -294,8 +309,9 @@ if confirmed
     q0 = ok ? int(math.floor(effRisk / (r * pointValue))) : 0
     // Over the contract ceiling the trade is cut down to fit, not skipped:
     // a smaller position is still the setup, whereas skipping it is not.
-    q = propMode and q0 > maxMicros ? maxMicros : q0
-    if propMode and q0 > maxMicros
+    capMicros = scalePlan ? scaleCap : maxMicros
+    q = propMode and q0 > capMicros ? capMicros : q0
+    if propMode and q0 > capMicros
         nClampQty += 1
     if ok and q >= 1
         entryPx  := e
@@ -372,6 +388,12 @@ if sessionEnd
     // Trails the closing balance upward and never moves down.
     mllFloor := math.max(mllFloor, accountStart + simNet - maxLossLimit)
 dayPnl      = propEquity - dayOpenEq
+// Topstep raises the Scaling Plan ceiling the next trading day, never
+// mid-session, so read it once at the open and hold it. The core clamps with
+// last session's value on the opening bar, which is the same one-day lag the
+// firm applies anyway.
+if scalePlan and sessionOpen
+    scaleCap := simNet < 1500 ? 20 : simNet < 2000 ? 30 : 50
 plannedRisk = riskPts * pointValue * qty
 blockReason = propBlock(propEquity, mllFloor, dayPnl, simNet, plannedRisk)
 
