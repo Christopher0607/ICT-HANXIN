@@ -17,7 +17,19 @@ Once a minute:
     1. pull the trading day's 1-minute bars, closed ones only
     2. run the research engine over them
     3. send any order whose confirmation has passed and that is not already out
-    4. at the cutoff, place nothing further and cancel what has not filled
+    4. at 15:30 stop placing and cancel what has not filled; at 16:00 flatten
+    5. stop as soon as nothing of ours is open, whatever the clock says
+
+**It stops when the day's work is finished, not at a chosen hour.** Every fixed
+cutoff considered was a number picked by looking at its own P&L, and the two
+halves of the history disagreed about which was best -- so the model runs its
+full declared session, and the process simply exits once the setup is resolved
+and no order or position is left. Measured over 697 days that is a median of
+11:16 ET and an average of 2.8 hours awake against 6.6 for sitting until the
+close. ``main`` returns 0 only on a clean finish, so a shutdown belongs in a
+wrapper -- ``python -m bridge.live --live && shutdown /h`` -- and never in here:
+a shutdown that fires from inside trading code takes the screen with it, and
+you never find out why.
 
 Four things here are load-bearing, and each fails silently if it is wrong:
 
@@ -36,11 +48,10 @@ to prove it rather than trusting the argument.
 produces signals, and still fills orders -- at prices the market left. Stale
 bars stop the engine instead.
 
-**Unfilled orders must be cancelled at the cutoff.** A resting limit left behind
-when this process exits will sit at the broker until the session ends and can
-fill hours later, against a stop and target computed for a market that no longer
-exists. Measured on 2024-2026, cancelling at 11:00 ET costs almost nothing:
-74.7% of the P&L survives against 76.1% for leaving them out there.
+**Unfilled orders must be cancelled at the deadline.** A resting limit left
+behind when this process exits will sit at the broker until the session ends and
+can fill hours later, against a stop and target computed for a market that no
+longer exists.
 """
 
 from __future__ import annotations
@@ -76,18 +87,27 @@ LIVE_CONFIG = LTFSweepConfig(min_session_bars=0)
 #: against pools that do not exist yet. The CME day rolls at 18:00 ET.
 SESSION_ROLL_HOUR = 18
 
-#: Seconds past the minute to wake. The backtest starts its fill window at the
-#: confirmation instant, which is the open of the next bar, so every second
-#: spent waiting is a second of that bar given away -- measured over 2024-2026,
-#: fills inside the confirming bar are 14.3% of trades and $4,209 of $16,409.
-#: The lag cannot be removed (a bar has to close before it can be read) but it
-#: can be kept to seconds instead of a minute.
+#: Seconds past the minute to wake. The backtest opens its fill window at the
+#: confirmation instant -- the close of one bar and the open of the next -- so
+#: every second spent waiting is a second of that bar given away. Fills inside
+#: the confirming bar are 14.3% of trades and $4,209 of $16,409 over 2024-2026,
+#: which is what this offset is protecting. It used to be a whole bar, not a
+#: couple of seconds, because three separate places read a deadline off the
+#: bars in hand rather than off the session's schedule.
 POLL_OFFSET_S = 2.0
 
 #: If the bar that just closed has not been published yet, try again inside the
 #: same minute rather than waiting for the next one -- which would be worse than
 #: never having tightened the offset at all.
 RETRY_AFTER_S = (3.0, 6.0)
+
+#: Consecutive ticks that must agree the day is over before the engine believes
+#: it. One is not enough: for a few seconds after an order is accepted, the
+#: broker can report neither a resting order nor a position, and a single clean
+#: look there would end the session on top of a live order. The costs are not
+#: symmetric -- an extra hour awake is electricity, an hour short is an
+#: unattended position.
+CLEAN_CHECKS_REQUIRED = 2
 
 
 def day_start(now: pd.Timestamp) -> pd.Timestamp:
@@ -130,6 +150,12 @@ class LiveEngine:
     outstanding: dict[str, int] = field(default_factory=dict)
     handled: set[str] = field(default_factory=set)
     closed: bool = False
+    #: True only when the day ended with nothing of ours left open. The exit
+    #: code follows this, and a shutdown wrapper follows the exit code.
+    finished_clean: bool = False
+    past_deadline: bool = False
+    flattened: bool = False
+    clean_checks: int = 0
     #: Newest bar seen on the last tick, for the late-publication retry.
     last_bar_ts: pd.Timestamp | None = None
 
@@ -157,14 +183,27 @@ class LiveEngine:
         """One minute's work. Returns whatever was decided, for the caller to log."""
         if self.closed:
             return []
+        minute = et_minute(now)
 
-        # The cutoff is checked before anything else, and deliberately before
-        # the feed is consulted. A dead or delayed feed is exactly when an order
-        # must not be left resting unattended, so a broken feed has to end the
-        # session rather than postpone the thing that ends it.
-        if et_minute(now) >= self.cfg.cutoff_minute:
+        # Deadlines are handled before the feed is consulted. A dead or delayed
+        # feed is exactly when an order must not be left resting unattended, so
+        # a broken feed has to drive the session to its end rather than postpone
+        # the steps that end it.
+        if minute >= self.cfg.cutoff_minute and not self.past_deadline:
             self.close_out(now)
+        if minute >= self.cfg.flat_minute and not self.flattened:
+            self.flatten(now)
+
+        # Finishing is a statement about the account, not about the clock: the
+        # day's setup is resolved and nothing of ours is left open. Most days
+        # that is true well before noon -- median 11:16 ET over 2024-2026 --
+        # which is why the engine can run the model's full session without
+        # keeping the machine awake for all of it.
+        if self.day_done(now):
+            self.finish(now)
             return []
+        if self.past_deadline:
+            return []          # nothing left to place; only waiting to be done
 
         bars = self.bars(now)
         self.last_bar_ts = None if bars.empty else bars["ts"].iloc[-1]
@@ -182,6 +221,70 @@ class LiveEngine:
                 continue
             out.append(self.send(row, key, now))
         return out
+
+    def ours(self, rows) -> list:
+        """Rows on the contract this engine trades."""
+        return [r for r in rows if r.get("contractId") == self.cfg.contract_id]
+
+    def day_done(self, now: pd.Timestamp) -> bool:
+        """Is there anything left to do today?
+
+        Every branch that cannot answer confidently answers "no". A wrong "yes"
+        ends the process with a position nobody is watching; a wrong "no" costs
+        an hour of electricity.
+        """
+        # One trade per day, so once the day's setup has been dealt with --
+        # placed, or skipped for size -- no other can appear. Before that, only
+        # the entry deadline settles it.
+        if not self.handled and not self.past_deadline:
+            return False
+
+        try:
+            resting = self.ours(self.broker.open_orders())
+            holding = self.ours(self.broker.open_positions())
+        except (BrokerError, KeyError, TypeError, ValueError) as exc:
+            self.journal.write("done_check_failed", error=str(exc))
+            log.warning("cannot tell whether the day is finished (%s); staying up", exc)
+            self.clean_checks = 0
+            return False
+
+        if resting or holding:
+            self.clean_checks = 0
+            return False
+
+        self.clean_checks += 1
+        return self.clean_checks >= CLEAN_CHECKS_REQUIRED
+
+    def finish(self, now: pd.Timestamp) -> None:
+        self.closed = True
+        self.finished_clean = True
+        self.journal.write("session_done", at=now.isoformat(),
+                           et_minute=et_minute(now),
+                           nothing_outstanding=not self.outstanding)
+        log.info("nothing left open; done for the day")
+
+    def flatten(self, now: pd.Timestamp) -> None:
+        """The model is flat at 16:00, and only the broker bracket enforces the
+        rest. Five of 550 out-of-sample trades reach this; they are also the
+        ones with nobody watching."""
+        self.flattened = True
+        try:
+            holding = self.ours(self.broker.open_positions())
+        except (BrokerError, KeyError, TypeError, ValueError) as exc:
+            self.journal.write("flatten_check_failed", error=str(exc))
+            log.error("cannot tell whether a position is open at the flat time: %s", exc)
+            return
+        if not holding:
+            return
+        try:
+            result = self.broker.close_position()
+        except BrokerError as exc:
+            self.journal.write("flatten_failed", error=str(exc))
+            log.error("could not flatten at the close: %s", exc)
+            return
+        self.journal.write("flattened", at=now.isoformat(), broker=result,
+                           size=sum(int(p.get("size", 0)) for p in holding))
+        log.info("flat at the close")
 
     def send(self, row, key: str, now: pd.Timestamp) -> Decision:
         side = "buy" if row.direction > 0 else "sell"
@@ -213,8 +316,10 @@ class LiveEngine:
         return decision
 
     def close_out(self, now: pd.Timestamp) -> None:
-        """Cancel every order still resting, then stop for the day."""
-        self.closed = True
+        """Entry deadline: cancel what has not filled. A position may still be
+        open, and its bracket is still the broker's to manage, so this does not
+        end the session -- ``day_done`` does."""
+        self.past_deadline = True
 
         # Ask what is actually still resting rather than cancelling everything
         # sent. An entry that filled has a live position behind it, and its id
@@ -249,7 +354,7 @@ class LiveEngine:
             log.info("cancelled %s at the cutoff", key)
             self.outstanding.pop(key, None)
 
-        self.journal.write("session_closed", at=now.isoformat(),
+        self.journal.write("entry_deadline", at=now.isoformat(),
                            cutoff_minute=self.cfg.cutoff_minute,
                            still_outstanding=len(self.outstanding))
 
@@ -321,15 +426,24 @@ def main(argv=None) -> int:
 
     engine = LiveEngine(cfg=cfg, broker=broker, journal=Journal(args.journal),
                         risk_usd=args.risk)
-    log.info("%s | %s | contract %s | risk $%.0f/trade | cutoff %02d:%02d ET",
+    log.info("%s | %s | contract %s | risk $%.0f/trade | entries until %02d:%02d ET, "
+             "flat %02d:%02d, exits when nothing is left open",
              "LIVE" if args.live else "dry run", cfg.preset, cfg.contract_id,
-             args.risk, cfg.cutoff_minute // 60, cfg.cutoff_minute % 60)
+             args.risk, cfg.cutoff_minute // 60, cfg.cutoff_minute % 60,
+             cfg.flat_minute // 60, cfg.flat_minute % 60)
     try:
         run(engine)
     except KeyboardInterrupt:
         log.info("interrupted; cancelling anything still resting")
         engine.close_out(pd.Timestamp.now(tz="UTC"))
-    return 0
+
+    # The exit code is what a shutdown wrapper reads, so it has to mean exactly
+    # one thing: nothing of ours is open. Anything else -- an error, an
+    # interrupt, a cancel that failed -- must keep the machine awake.
+    if engine.finished_clean:
+        return 0
+    log.error("finished with work outstanding; do NOT shut down unattended")
+    return 1
 
 
 if __name__ == "__main__":  # pragma: no cover

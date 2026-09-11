@@ -17,8 +17,13 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from ict.data import NY, SESSION_ROLL_HOUR
 from ict.events import BULLISH
 from ict.sessions import RTH_CLOSE_MINUTE
+
+#: The CME trading day rolls at 18:00 ET, so a minute at or past it belongs to
+#: the calendar day before the trading date.
+SESSION_ROLL_MINUTE = SESSION_ROLL_HOUR * 60
 
 #: Columns every strategy must produce. The first eight are what the engine
 #: consumes; the rest are diagnostics that let any trade be traced back to the
@@ -50,9 +55,26 @@ class BaseConfig:
 
 
 def minute_cutoff(day: pd.DataFrame, minute: int) -> pd.Timestamp | None:
-    """Timestamp of the day's last bar at or before the given ET minute."""
-    sel = day[day["minutes_from_midnight"] <= minute]
-    return None if sel.empty else sel["ts"].max()
+    """The ET wall-clock instant of ``minute`` on this trading day.
+
+    Read off the calendar rather than off the bars. When an order expires is a
+    property of the session's schedule, and the obvious implementation --
+    ``day[minutes_from_midnight <= minute]["ts"].max()``, the last bar at or
+    before that minute -- only agrees with that on a day whose bars are all
+    present. Replayed minute by minute it collapses to "now": with bars through
+    09:56 the deadline for 15:30 comes back as 09:56, and every order whose
+    confirmation is one bar later is discarded as already expired.
+
+    The CME day rolls at 18:00 ET, so a minute at or after the roll belongs to
+    the calendar day before the trading date.
+    """
+    if day.empty:
+        return None
+    trading_date = day["trading_date"].iloc[0]
+    calendar_date = (pd.Timestamp(trading_date) - pd.Timedelta(days=1)
+                     if minute >= SESSION_ROLL_MINUTE else pd.Timestamp(trading_date))
+    local = (calendar_date.tz_localize(NY) + pd.Timedelta(minutes=minute))
+    return local.tz_convert("UTC")
 
 
 def build_order(

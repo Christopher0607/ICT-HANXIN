@@ -7,6 +7,8 @@ Endpoints and payload shapes are from the ProjectX Gateway docs:
                                   -> {orderId, success, errorCode, errorMessage}
     POST /api/Order/cancel        {accountId, orderId} -> {success, errorCode}
     POST /api/Order/searchOpen    {accountId} -> {orders: [{id, status, ...}], ...}
+    POST /api/Position/searchOpen {accountId} -> {positions: [{id, contractId, size, ...}]}
+    POST /api/Position/closeContract {accountId, contractId} -> {success, errorCode}
     POST /api/History/retrieveBars {contractId, live, startTime, endTime, unit,
                                     unitNumber, limit, includePartialBar}
                                   -> {bars: [{t, o, h, l, c, v}], success, ...}
@@ -155,6 +157,9 @@ class DryRunBroker:
     #: Order ids a test wants to look filled, so the cutoff path can be driven
     #: down both branches.
     filled: set[int] = field(default_factory=set)
+    #: Contracts a test wants to look held, so the flatten path can be driven.
+    position_size: int = 0
+    closed_positions: int = 0
     #: Bars to hand back, so a replay can drive the runner without a network.
     bars: pd.DataFrame | None = None
 
@@ -178,8 +183,21 @@ class DryRunBroker:
         Tests that need a fill put the id in ``filled``.
         """
         gone = set(self.cancelled) | set(self.filled)
-        return [{"id": -i - 1, "accountId": self.cfg.account_id}
+        return [{"id": -i - 1, "accountId": self.cfg.account_id,
+                 "contractId": self.cfg.contract_id}
                 for i in range(len(self.sent)) if -i - 1 not in gone]
+
+    def open_positions(self) -> list[dict[str, Any]]:
+        """Whatever a test put in ``position_size``, as a position row."""
+        if not self.position_size:
+            return []
+        return [{"id": 1, "accountId": self.cfg.account_id,
+                 "contractId": self.cfg.contract_id, "size": self.position_size}]
+
+    def close_position(self) -> dict[str, Any]:
+        self.closed_positions += 1
+        self.position_size = 0
+        return {"success": True, "errorCode": 0, "errorMessage": None, "dryRun": True}
 
     def retrieve_bars(self, start, end, *, limit: int = 2000) -> pd.DataFrame:
         """Replay, modelling ``includePartialBar=False`` faithfully.
@@ -248,6 +266,22 @@ class TopstepXBroker:
         """Orders still resting, so a cancel sweep can skip the ones that filled."""
         out = self._post("/api/Order/searchOpen", {"accountId": self.cfg.account_id})
         return out.get("orders", [])
+
+    def open_positions(self) -> list[dict[str, Any]]:
+        """Positions still held. The engine will not call the day finished while
+        one is open, and will not leave one running past the flat time."""
+        out = self._post("/api/Position/searchOpen", {"accountId": self.cfg.account_id})
+        return out.get("positions", [])
+
+    def close_position(self) -> dict[str, Any]:
+        """Flatten this contract at the market -- the 16:00 rule in the model.
+
+        Only 5 of 550 out-of-sample trades exit this way; the rest are taken out
+        by the bracket. It still has to work, because the ones that reach it are
+        the ones nobody is watching."""
+        return self._post("/api/Position/closeContract",
+                          {"accountId": self.cfg.account_id,
+                           "contractId": self.cfg.contract_id})
 
     def retrieve_bars(self, start, end, *, limit: int = 2000) -> pd.DataFrame:
         return parse_bars(self._post("/api/History/retrieveBars",

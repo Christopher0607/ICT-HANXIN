@@ -173,8 +173,15 @@ def _from_sweep(session, i, direction, level, extreme, msb, gaps, step, config) 
     sweep_ts = session["ts"].iloc[i]
     sweep_confirmed = sweep_ts + step  # the sweep needs its own bar to close
 
-    deadline_index = min(len(session) - 1, i + config.confirm_within_bars)
-    deadline = session["ts"].iloc[deadline_index]
+    # Expressed in time, not as an array index. The obvious form,
+    # ``session["ts"].iloc[min(len(session) - 1, i + confirm_within_bars)]``,
+    # clamps to whatever the last available bar happens to be -- which is the
+    # right answer on a finished day and the wrong one on a day still being
+    # replayed minute by minute, where the clamp is always biting. Measured on
+    # 2026-09-01: with bars only through 09:56 the CHoCH confirmed at 09:57 is
+    # already detectable, but the clamped deadline of 09:56 threw it away, so
+    # the live engine waited a whole extra bar for a signal it already had.
+    deadline = sweep_ts + config.confirm_within_bars * step
 
     breaks = msb[(msb["direction"] == direction)
                  & (msb["confirmed_at"] > sweep_confirmed)

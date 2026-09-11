@@ -55,6 +55,7 @@ class Config:
 
     live_data: bool
     cutoff_minute: int
+    flat_minute: int
     max_bar_age_s: float
 
     preset: str
@@ -91,11 +92,14 @@ class Config:
             # account is on the sim feed; asking it for live data returns an
             # empty bar array rather than an error.
             live_data=_env("BRIDGE_LIVE_DATA", "0") not in ("0", "false", "False"),
-            # Minutes from ET midnight after which no new order is placed and
-            # any unfilled entry is cancelled. 11:00 ET by default: measured on
-            # 2024-2026, stopping there keeps 74.7% of the P&L for 63.6% of the
-            # trades, and running on to 11:30 is worse, not better.
-            cutoff_minute=_env("BRIDGE_CUTOFF_MINUTE", 11 * 60, int),
+            # The strategy's own entry deadline and flat time, not a second
+            # opinion about them: tests/test_live.py asserts both against
+            # LTFSweepConfig so a change to one that is not made to the other
+            # fails the suite. An earlier cutoff was measured and rejected --
+            # every candidate was a value picked by looking at its own P&L,
+            # and the engine stops when the day's work is finished anyway.
+            cutoff_minute=_env("BRIDGE_CUTOFF_MINUTE", 15 * 60 + 30, int),
+            flat_minute=_env("BRIDGE_FLAT_MINUTE", 16 * 60, int),
             max_bar_age_s=_env("BRIDGE_MAX_BAR_AGE_S", 150.0, float),
             preset=preset,
             account_start=_env("BRIDGE_ACCOUNT_START", 50000.0, float),

@@ -24,12 +24,11 @@ that, and the journal records why, so those are reported separately. The same
 goes for a signal missed because the feed went stale -- the engine refusing to
 trade on ten-minute-old bars is it working, not failing.
 
-One difference is expected and is NOT a fault: the research engine can fill
-inside the bar that confirmed the setup, because it assumes an order resting
-from the confirmation instant. ``bridge/live.py`` cannot see that bar until it
-closes. Measured over 2024-2026 that is 14.3% of trades, and it shows up here as
-the engine having a trade the journal does not -- with a ``skipped`` or no entry
-at all. Check the timing before calling it a logic fault.
+The engine and the journal should now agree on timing: three places that used
+to read a deadline off the bars in hand rather than off the session's schedule
+have been fixed, so an order goes out at the confirmation instant rather than a
+bar later. A systematic one-bar difference here means one of them has regressed
+-- see ``tests/test_live.py::test_the_order_goes_out_the_instant_the_setup_confirms``.
 """
 
 from __future__ import annotations
@@ -142,8 +141,8 @@ def main(argv=None) -> int:
     ap.add_argument("--end", required=True, help="exclusive UTC date")
     ap.add_argument("--risk", type=float, default=1000.0,
                     help="must match the risk the bridge was configured with")
-    ap.add_argument("--cutoff-minute", type=int, default=11 * 60,
-                    help="must match BRIDGE_CUTOFF_MINUTE (default 660 = 11:00 ET)")
+    ap.add_argument("--cutoff-minute", type=int, default=15 * 60 + 30,
+                    help="must match BRIDGE_CUTOFF_MINUTE (default 930 = 15:30 ET)")
     args = ap.parse_args(argv)
 
     rows = Journal(args.journal).read()
