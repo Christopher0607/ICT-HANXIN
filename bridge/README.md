@@ -132,11 +132,31 @@ ProjectX 的 `stopLossBracket.ticks` 是距離進場價的 tick 數。
 
 ## 已查證 vs 沒查證
 
+**七個端點全部對過官方文件，全部都還沒對過真的伺服器。**
+所有測試跑的都是 `DryRunBroker`，所以這裡驗證過的是「我們照文件寫對了嗎」，
+不是「伺服器真的這樣回應嗎」。後者只有 Practice Account 答得出來
+（見 `docs/GO_LIVE.md`）。
+
 | 端點 | 狀態 |
 |---|---|
-| `POST /api/Auth/loginKey` | 對過官方文件 |
-| `POST /api/Order/place` | 對過官方文件（含 enum 和 bracket 結構） |
-| `POST /api/Account/search` | **沒查證** —— 建議直接設 `TOPSTEPX_ACCOUNT_ID` |
+| `Auth/loginKey` | 對過文件 |
+| `Order/place` | 對過文件（含 enum 和 bracket 結構） |
+| `Order/cancel` | 對過文件 |
+| `Order/searchOpen` | 對過文件 |
+| `Position/searchOpen` | 對過文件 |
+| `Position/closeContract` | 對過文件 |
+| `History/retrieveBars` | 對過文件。⚠ **文件自相矛盾**：把 `contractId` 標成 integer，而下單端點吃的是 `CON.F.US.MNQ.Z26` 字串。`--preflight` 會實際打一次確認 |
+| `Account/search` | **沒查證** —— 建議直接設 `TOPSTEPX_ACCOUNT_ID` |
+
+## 費用
+
+| | |
+|---|---|
+| Trading Combine 50K | $85/月 |
+| **TopstepX API Access** | **$29/月，代碼 `topstep` 是 $14.50** |
+
+API Access 由 ProjectX 分開計費，**沒有它就沒有 API 金鑰**，這座橋一行都跑不動。
+Practice Account 免費，但**需要有效的 Combine 訂閱**才能啟用。
 
 ## 環境變數
 

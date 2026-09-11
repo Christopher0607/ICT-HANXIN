@@ -385,6 +385,55 @@ def test_the_flat_time_sends_nothing_when_flat(tmp_path):
     assert "flattened" not in [row["event"] for row in journal.read()]
 
 
+def test_the_journal_says_which_account_it_ran_on(tmp_path):
+    """Practice and Combine are the same program writing the same file.
+
+    The go-live sequence is "prove it on Practice, then point it at the
+    Combine", so a journal that cannot say which side produced it is unreadable
+    exactly when it matters -- when a reconciliation looks wrong.
+    """
+    journal = Journal(tmp_path / "j.jsonl")
+    conf = cfg(account_id=778899, live=True)
+    eng = LiveEngine(cfg=conf, broker=DryRunBroker(conf), journal=journal,
+                     risk_usd=250.0)
+
+    eng.announce()
+
+    (row,) = journal.read()
+    assert row["event"] == "session_start"
+    assert row["account_id"] == 778899
+    assert row["preset"] == "Topstep 50K"
+    assert row["risk_usd"] == 250.0
+    assert row["live"] is True
+    assert row["contract_id"] == "CON.F.US.MNQ.Z26"
+
+
+def test_a_dry_run_says_so(tmp_path):
+    journal = Journal(tmp_path / "j.jsonl")
+    conf = cfg(live=False)
+    LiveEngine(cfg=conf, broker=DryRunBroker(conf), journal=journal,
+               risk_usd=1000.0).announce()
+    assert journal.read()[0]["live"] is False
+
+
+def test_the_session_header_carries_no_credentials(tmp_path):
+    """A journal is a file that gets copied into issues and screenshots.
+
+    Asserted rather than left to a reading of the code: the obvious way to write
+    this line is ``asdict(cfg)``, which would put the API key and the webhook
+    secret in every run.
+    """
+    journal = Journal(tmp_path / "j.jsonl")
+    conf = cfg(api_key="SUPERSECRETKEY123", webhook_secret="hunter2-and-friends",
+               username="alice")
+    LiveEngine(cfg=conf, broker=DryRunBroker(conf), journal=journal,
+               risk_usd=1000.0).announce()
+
+    blob = (tmp_path / "j.jsonl").read_text()
+    for secret in ("SUPERSECRETKEY123", "hunter2-and-friends", "alice"):
+        assert secret not in blob, f"{secret} reached the journal"
+
+
 def test_the_bridge_clock_matches_the_strategy(monkeypatch):
     """Two statements of one schedule are only safe while they agree."""
     for name in ("TOPSTEPX_USERNAME", "TOPSTEPX_API_KEY"):

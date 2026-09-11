@@ -159,6 +159,32 @@ class LiveEngine:
     #: Newest bar seen on the last tick, for the late-publication retry.
     last_bar_ts: pd.Timestamp | None = None
 
+    def announce(self) -> dict:
+        """Open the journal with what this run is, so the file can say so later.
+
+        Practice and Combine are the same program, the same contract and by
+        default the same journal path, and the whole go-live sequence is "prove
+        it on Practice, then point it at the Combine". Without this line a
+        journal cannot answer which side it came from -- which is the one
+        question you ask when a reconciliation looks wrong.
+
+        Named fields only, never ``asdict(cfg)``: the config carries the API key
+        and the webhook secret, and a journal is a file that gets copied around.
+        """
+        return self.journal.write(
+            "session_start",
+            account_id=self.cfg.account_id,
+            preset=self.cfg.preset,
+            contract_id=self.cfg.contract_id,
+            risk_usd=self.risk_usd,
+            live=self.cfg.live,
+            live_data=self.cfg.live_data,
+            use_guard=self.cfg.use_guard,
+            scaling_plan=self.cfg.scaling_plan,
+            cutoff_minute=self.cfg.cutoff_minute,
+            flat_minute=self.cfg.flat_minute,
+        )
+
     def bars(self, now: pd.Timestamp) -> pd.DataFrame:
         raw = self.broker.retrieve_bars(day_start(now), now)
         return D.add_time_columns(raw) if not raw.empty else raw
@@ -426,6 +452,7 @@ def main(argv=None) -> int:
 
     engine = LiveEngine(cfg=cfg, broker=broker, journal=Journal(args.journal),
                         risk_usd=args.risk)
+    engine.announce()
     log.info("%s | %s | contract %s | risk $%.0f/trade | entries until %02d:%02d ET, "
              "flat %02d:%02d, exits when nothing is left open",
              "LIVE" if args.live else "dry run", cfg.preset, cfg.contract_id,
