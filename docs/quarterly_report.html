@@ -63,6 +63,43 @@ border-radius:999px}
 .muted{color:var(--ink-3);font-weight:400}
 footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--rule);
 color:var(--ink-3);font-size:12.5px}
+/* Printing. These rules live here rather than in scripts/report_pdf.py so that
+   Ctrl+P in a browser and the generated PDF are the same page. A second set of
+   print rules that only the script knew about would drift the first time
+   somebody printed it themselves. */
+@media print{
+/* The dark palette is a screen decision. Printed, it is a page of ink, and
+   forcing light here also stops prefers-color-scheme from deciding what the
+   PDF looks like based on whatever machine rendered it. */
+:root{--surface:#fff;--card:#fff;--ink:#0b0b0b;--ink-2:#44433f;--ink-3:#63625b;
+--rule:#d6d5cf;--pos:#1e63b8;--neg:#c93c3b;--crit:#b83232;--good:#0a840a;}
+/* Without this the browser drops every background: the pills lose their fill,
+   the drawdown area disappears, and the quarter bars print as outlines. */
+*{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{background:#fff;font-size:11pt}
+/* A button nobody can press. */
+.langbar{display:none}
+.wrap{max-width:none;padding-block:0;padding-left:0;padding-right:0}
+/* overflow-x:auto is how a wide table survives a phone. On paper there is
+   nothing to scroll, so the same rule silently cuts the right-hand columns
+   off -- and the cost table is seven columns wide. */
+.scroll{overflow:visible}
+table{font-size:9.5pt}
+th,td{padding:6px 7px}
+.card,.tile,.verdict,svg,table,.caveats li{break-inside:avoid}
+/* A heading and the sentence under it are one unit with the chart or table
+   they introduce: break-after on the heading alone still leaves the heading
+   and its lead paragraph stranded at the foot of a page with the thing they
+   describe overleaf. Only lead paragraphs match h2+p, so this does not glue
+   body text together. */
+h1,h2,h3,h2+p{break-after:avoid}
+h2{margin-top:24px}
+/* 460px leaves the drawdown chart just too tall to follow its own heading
+   onto the first page, which costs a whole sheet of paper; 420 fits and is
+   still wider than the chart is on a phone. */
+svg{max-width:420px}
+footer{margin-top:28px}
+}
 </style>
 <div class="wrap">
 <div class="langbar"><button type="button" id="lang">English</button></div>

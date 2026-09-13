@@ -77,6 +77,25 @@ subscription**」—— 沒有 Combine 就沒有 Practice。所以不可能「�
 （別為了讓它跑而填一個假的金鑰：這個專案刻意不讓任何地方有預設密鑰，
 因為假密鑰會在真正需要它的那天還是假的。）
 
+### 排到日曆上長什麼樣
+
+表格說的是「做什麼」，這裡是「什麼時候、多久」。月費從第 1 步就開始走，
+所以前面每多拖一天都是在付錢等待。
+
+| 什麼時候 | 做什麼 | 為什麼卡在這裡 |
+|---|---|---|
+| 註冊當天 | 第 1–3 步：買 Combine + API Access、啟用 Practice、跑離線 preflight | 全部是同一個下午的事，不必等 |
+| 隔天 | 第 4 步：連 Practice 跑 preflight | 要等一個有行情的交易日 |
+| **之後約一週** | 第 5–6 步：Practice 上真的送單，**收集到五筆左右的訊號** | 一天最多一個訊號，所以這一步是被交易日的數量卡住的，不是被你卡住的 |
+| 對帳連續乾淨那天 | 第 7 步：`TOPSTEPX_ACCOUNT_ID` 換成 Combine | **只有這個條件，沒有時間條件** |
+
+一週不是規定，是「五個訊號」換算出來的。乾淨得早就早換，
+對不上就繼續留在 Practice —— Practice 每天 10 次免費重置，考試帳戶爆了要再買。
+
+**換月要排進去。** 現在的 `BRIDGE_CONTRACT_ID` 是 `CON.F.US.MNQ.Z26`（2026 年 12 月），
+而這一年的重播從第一筆到通過是 **106 天** —— 會跨過 12 月中的換月。
+`Z26` → `H27` 要在 **2026-12 中旬之前**改掉，改完**一定要重跑 `--preflight`**（見最後一節）。
+
 ### 費用：兩條路徑，選 Standard
 
 Topstep 的 50K 有兩條定價路徑（數字來自你自己的 dashboard，2026-09-13）：
@@ -86,7 +105,7 @@ Topstep 的 50K 有兩條定價路徑（數字來自你自己的 dashboard，202
 | 月費 | **$49** | $95，RTA 折扣後 **$85** |
 | Reset | **$49** | **$85** |
 | 月費續訂送 reset credit | Included | Included |
-| Activation | **$149**，**只在拿到 funded 帳戶時收一次** | $0 |
+| Activation | **$149**，**每拿到一個 funded 帳戶收一次** | $0 |
 
 **選 Standard。** 關鍵是 activation 的收費時機 ——
 官方寫的是「charged once per XFA **earned**」，**爆十次不收，通過才收**。
@@ -95,7 +114,7 @@ No-Activation 用「每個月多 $36、**每次重置也多 $36**」去買一個
 
 > **「月數 + 付費重置次數」合計少於約 4，No-Activation 才划算。**
 
-這一年的重播是 4 個月 + 7 次付費重置 = **11**，遠超過。
+這一年的重播是 4 個月 + 5 次付費重置 = **9**，遠超過。
 完整明細在季度報告的「Busting and re-buying」那一節。
 
 另外一筆：**TopstepX API Access $29/月，用代碼 `topstep` 是 $14.50**，
@@ -207,17 +226,37 @@ uv run python -m bridge.live --preflight
 | `bar timestamps` | 若最新 K 棒不到 60 秒 → 這個行情源用**收盤**時間標，每個訊號會錯開一根 |
 | `signals so far today` | 引擎在今天這段 K 棒上看到幾個設置 |
 
-**驗證時用將來真的要跑的那組設定**（preset `Topstep 50K`、`--risk 1000`、
+**驗證時用將來真的要跑的那組設定**（preset `Topstep 50K`、`--risk 900`、
 `BRIDGE_USE_GUARD=0`）—— 要驗的就是那組。Practice 餘額是 $150K 而
 `BRIDGE_ACCOUNT_START` 是 50000，考試階段守衛關着所以無害；
 **funded 階段守衛開着的時候這個不符會讓守衛算錯**，換帳戶時記得一起改。
 
-Practice 的部位上限是 15 lots，遠高於我們的口數（$1,000 風險下實測 16 micros）。
+### 口數不是一個固定的數字（這一步最容易誤判）
+
+口數是 `風險 ÷ 停損距離 ÷ $2`，**停損越窄口數越大**，所以它有一條長尾。
+$900 之下實測這一年的 198 個訊號：
+
+| | 口數 |
+|---|---|
+| 中位數 | **10** |
+| 第 75 百分位 | 17 |
+| 第 90 百分位 | 25 |
+| 最大 | **83**（停損只有 5.4 點的那一天） |
+
+Practice 的部位上限是 **15 lots** —— 也就是說 **198 個訊號裡有 58 個（29%）超過它**。
+先前這份文件寫「遠高於我們的口數」，那是錯的，而且錯得剛好會讓你在對帳時
+把 Practice 的上限當成 bug。**啟用 Practice 之後先去 dashboard 確認那個上限的實際值。**
+
+超過上限的那幾天會被打回來或被夾到上限，兩種都會讓對帳出現差異。
+**只有能在 journal 上對到「被拒絕／被夾住」那一行的差異才可以放過**；對不到就當成真的差異。
+
+考試帳戶那邊的上限是 preset 裡的 50 micros，這一年只咬到 4 筆（2%），
+引擎自己會夾並寫進 journal。
 
 ### 5. Practice 上真的送單（官方要求的那一步）
 
 ```bash
-uv run python -m bridge.live --live --journal data/bridge_journal.jsonl --risk 1000
+uv run python -m bridge.live --live --journal data/bridge_journal.jsonl --risk 900
 ```
 
 Practice 上 `--live` 送的是模擬單，但走的是**完整的真實路徑**。
@@ -228,7 +267,7 @@ Practice 和 Combine 共用同一支程式和同一個檔案，那一行是事�
 
 ```bash
 uv run python scripts/reconcile.py --journal data/bridge_journal.jsonl \
-  --start 2026-09-01 --end 2026-10-01 --risk 1000
+  --start 2026-09-01 --end 2026-10-01 --risk 900
 ```
 
 差異分三類，意思完全不同：
@@ -236,7 +275,7 @@ uv run python scripts/reconcile.py --journal data/bridge_journal.jsonl \
 | 類別 | 意思 | 該做什麼 |
 |---|---|---|
 | **data** | 進場價差一兩檔 | 行情源不同，正常 |
-| **settings** | **口數不一樣** | 風險參數兩邊不一致，**每一筆倉位都算錯了。停。** |
+| **settings** | **口數不一樣** | 風險參數兩邊不一致，**每一筆倉位都算錯了。停。**（唯一的例外在上面：Practice 的 15 lots 上限，而且要在 journal 上對得到那一行） |
 | **logic** | 該進沒進 / 不該進卻進了 | 兩邊跑的不是同一份東西。**停。** |
 
 **對帳連續乾淨之前不要把 `TOPSTEPX_ACCOUNT_ID` 換成 Combine。**
@@ -266,7 +305,8 @@ Practice 每天有 10 次免費重置，錯了重來不花錢；考試帳戶爆�
 
 考試階段把守衛關掉是反直覺的，理由在 `tradingview/README.md`：
 守衛把爆倉換成「停手」，而停手既不通過也不爆倉、月費照走 ——
-實測通過率從 35% 掉到 10%。考試 $49 買得回，funded 買不回，所以兩邊反過來。
+實測通過率從 35% 掉到 10%。考試重置 $49，funded 只有 Back2Funded 的 $549、而且只限第一筆出金以前（見上面那節），
+所以兩邊反過來。
 
 ---
 
@@ -293,13 +333,13 @@ Practice 每天有 10 次免費重置，錯了重來不花錢；考試帳戶爆�
 Windows（工作排程器，勾「喚醒電腦以執行此工作」，21:25 啟動）：
 
 ```bat
-py -m bridge.live --live --risk 1000 && shutdown /h
+py -m bridge.live --live --risk 900 && shutdown /h
 ```
 
 macOS（`sudo pmset repeat wakeorpoweron MTWRF 21:25:00`）：
 
 ```bash
-python -m bridge.live --live --risk 1000 && sudo pmset sleepnow
+python -m bridge.live --live --risk 900 && sudo pmset sleepnow
 ```
 
 **不要把 `shutdown` 寫進交易程式。** 萬一哪天誤觸發，機器關了、螢幕黑了，

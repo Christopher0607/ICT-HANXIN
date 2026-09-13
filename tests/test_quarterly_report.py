@@ -6,7 +6,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts
 
 import pandas as pd
 import pytest
-from quarterly_report import PATHS, PROFIT_TARGET, LOSS_LIMIT, path_cost, rebuy
+from quarterly_report import (PATHS, PROFIT_TARGET, LOSS_LIMIT, STYLE,
+                              path_cost, rebuy)
 
 
 def seq(pnls):
@@ -78,3 +79,31 @@ def test_standard_wins_a_reset_heavy_run_and_loses_a_short_one():
              for n, p in PATHS.items()}
     assert quick["No-Activation"] < quick["Standard"], (
         "pass first time and the free activation is worth more than the premium")
+
+
+def print_block() -> str:
+    """The @media print body, so a rule outside it cannot satisfy these tests."""
+    start = STYLE.index("@media print{")
+    return STYLE[start:]
+
+
+def test_print_css_hides_the_language_toggle():
+    """A button in a PDF is a button nobody can press."""
+    assert ".langbar{display:none}" in print_block()
+
+
+def test_print_css_unclips_scrollable_tables():
+    """.scroll is overflow-x:auto so a wide table survives a phone. On paper
+    there is nothing to scroll and the same rule cuts the right-hand columns
+    off instead -- silently, and only on the printed copy."""
+    assert ".scroll{overflow:visible}" in print_block()
+
+
+def test_print_css_keeps_figures_whole_and_in_colour():
+    """Both failures only show up on paper: a chart split across a page
+    boundary, and pills and bars printed as empty outlines."""
+    block = print_block()
+    assert "print-color-adjust:exact" in block
+    kept = next(line for line in block.splitlines() if "break-inside:avoid" in line)
+    for selector in ("svg", "table", ".card", ".tile"):
+        assert selector in kept, f"{selector} may be split across a page"

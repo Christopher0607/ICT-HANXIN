@@ -14,6 +14,10 @@ dev = ["pytest>=8.0"]
 # Only scripts/fetch_databento.py needs this. Running the backtests off the
 # stored parquet files does not, so it stays out of the main dependency list.
 data = ["databento>=0.34"]
+# Only scripts/report_pdf.py needs this, and it needs a Chromium build too
+# (uv run playwright install chromium). The report itself is a plain HTML file;
+# nothing in the main path should have to carry a browser.
+pdf = ["playwright>=1.44"]
 
 [build-system]
 requires = ["hatchling"]
