@@ -41,6 +41,18 @@ OUT = pathlib.Path("docs/quarterly_report.html")
 PROFIT_TARGET = 3000.0
 LOSS_LIMIT = 2000.0
 
+#: Topstep 50K, read off the dashboard on 2026-09-13. Both paths include a free
+#: reset credit with every monthly rebill; the difference that matters is WHEN
+#: the activation fee lands -- Standard charges it "once per XFA earned", so a
+#: run of failures never pays it. No-Activation buys that away with +$36 a month
+#: AND +$36 on every reset, which is the wrong trade for a plan built on
+#: re-buying: it wins only while (months + paid resets) stays under about four.
+PATHS = {
+    "Standard":       {"monthly": 49.0, "reset": 49.0, "activation": 149.0},
+    "No-Activation":  {"monthly": 85.0, "reset": 85.0, "activation": 0.0},
+}
+API_MONTHLY = 14.50
+
 #: Position sizes to show side by side. The spread matters more than the exact
 #: values: it is the difference between a size that survives and one that does
 #: not.
@@ -105,6 +117,53 @@ def race(pnl: np.ndarray) -> tuple[str, int | None]:
     if b is None or (p is not None and p < b):
         return "passed", p
     return "busted", b
+
+
+def rebuy(trades: pd.DataFrame) -> dict:
+    """Walk the real sequence, buying a fresh account after every breach.
+
+    The point of doing it in order rather than by bootstrap: losses cluster. A
+    shuffle treats each attempt as an independent draw and says the 2% plan
+    needs 2.9 of them; the actual sequence needed eleven, because the bad
+    quarter's losses arrive together and take several accounts with them.
+    """
+    equity = peak = 0.0
+    accounts = 1
+    start = trades["entry_ts"].iloc[0]
+    for pnl, exit_ts in zip(trades["net_pnl"], trades["exit_ts"]):
+        equity += pnl
+        peak = max(peak, equity)
+        if equity >= PROFIT_TARGET:
+            return {"accounts": accounts, "days": (exit_ts - start).days, "passed": True}
+        if equity - peak <= -LOSS_LIMIT:
+            equity = peak = 0.0
+            accounts += 1
+    last = trades["exit_ts"].iloc[-1]
+    return {"accounts": accounts, "days": (last - start).days, "passed": False}
+
+
+def path_cost(path: dict, accounts: int, days: int, passed: bool) -> dict:
+    """Itemised, because a total alone reads as though something was left out.
+
+    Every monthly rebill banks one free reset credit, so the first month earns
+    none and each later month covers one of the resets.
+    """
+    months = max(1, int(np.ceil(days / 30.4)))
+    free = max(0, months - 1)
+    paid = max(0, (accounts - 1) - free)
+    lines = {
+        "subscription": months * path["monthly"],
+        "paid_resets": paid * path["reset"],
+        "api_access": months * API_MONTHLY,
+        # Charged once per funded account EARNED, so a year of failures pays
+        # nothing -- which is exactly why buying it away is poor value here.
+        "activation": path["activation"] if passed else 0.0,
+    }
+    # The count is `reset_count`, never `paid_resets` -- that key is the dollar
+    # amount below, and naming both the same made the count render as "$343
+    # after 3 free credits".
+    return {"months": months, "free_credits": free, "reset_count": paid,
+            **lines, "total": sum(lines.values())}
 
 
 def profit_factor(pnl: pd.Series) -> float:
@@ -293,6 +352,7 @@ svg{width:100%;max-width:560px;height:auto;display:block;margin-inline:auto}
 .bar-value{fill:var(--ink-2);font-size:11px;font-weight:600}
 .bar.pos{fill:var(--pos)}.bar.neg{fill:var(--neg)}
 .caveats li{margin:7px 0;color:var(--ink-2)}
+.muted{color:var(--ink-3);font-weight:400}
 footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--rule);
 color:var(--ink-3);font-size:12.5px}
 """
@@ -324,6 +384,32 @@ def quarter_table(q: pd.DataFrame, totals: dict) -> str:
 
 
 OUTCOME_WORD = {"busted": "busted", "passed": "passed", "neither": "survived"}
+
+
+def cost_table(costs: dict) -> str:
+    """Every line, not just the total. A summary that hides the activation fee
+    reads as though it was forgotten -- and this table is read to make a
+    decision, so anything left out is a number argued about later."""
+    rows = ["subscription", "paid_resets", "api_access", "activation"]
+    label = {"subscription": "monthly subscription", "paid_resets": "paid resets",
+             "api_access": "API access", "activation": "activation fee"}
+    head = "<tr><th>cost</th>" + "".join(
+        f"<th>{esc(name)}</th>" for name in costs) + "</tr>"
+    body = ""
+    for key in rows:
+        cells = "".join(f"<td>${esc(money(c[key], sign=False))}</td>" for c in costs.values())
+        note = ""
+        if key == "paid_resets":
+            first = next(iter(costs.values()))
+            note = (f' <span class="muted">({first["reset_count"]} paid after '
+                    f'{first["free_credits"]} free credits)</span>')
+        if key == "activation":
+            note = ' <span class="muted">(charged only on success)</span>'
+        body += f"<tr><td>{label[key]}{note}</td>{cells}</tr>"
+    totals = "".join(f'<td>${esc(money(c["total"], sign=False))}</td>' for c in costs.values())
+    body += f'<tr class="total"><td>total to pass</td>{totals}</tr>'
+    return (f'<div class="scroll"><table><thead>{head}</thead>'
+            f'<tbody>{body}</tbody></table></div>')
 
 
 def ladder_table(rows: list[dict]) -> str:
@@ -408,6 +494,19 @@ def build(ctx: dict) -> str:
         ladder_table(lad),
         f'<p>{esc(ctx["ladder_note"])}</p>',
 
+        "<h2>Busting and re-buying: what the year would have cost</h2>",
+        f'<p>Walking the same trades in order and buying a fresh account after '
+        f'every breach. At ${ctx["risk"]:,.0f} a trade that is '
+        f'<b>{ctx["rebuy"]["accounts"]} accounts over {ctx["rebuy"]["days"]} days</b>, '
+        f'and the last one passed. Re-buying works &mdash; it is just more '
+        f'accounts and more months than a shuffled estimate suggests, because '
+        f'the losing quarter arrives as one run rather than spread out.</p>',
+        cost_table(ctx["costs"]),
+        f'<p>{esc(ctx["path_note"])}</p>',
+        '<p class="muted">One path through one year, not a distribution. It is '
+        'here for the order of magnitude &mdash; hundreds of dollars and several '
+        'months &mdash; not to pick a position size from.</p>',
+
         "<h2>What this is and is not</h2>",
         '<ul class="caveats">',
         "<li><b>A backtest, not a track record.</b> No order here was ever sent. "
@@ -421,6 +520,10 @@ def build(ctx: dict) -> str:
         "exactly where two feeds disagree.</li>",
         f"<li><b>Data ends {esc(ctx['data_end'])}.</b> The last quarter is "
         "partial.</li>",
+        "<li><b>The consistency target is not modelled here.</b> A single day may not "
+        "exceed 55% of the profit target ($1,650 on a 50K) or the target rises. "
+        "At this risk the biggest day is about one unit of risk, so it has room "
+        "&mdash; but it caps position size near $1,650 a trade.</li>",
         "<li><b>The eleven-year record is &minus;$3,044</b> across 2,161 trades, "
         "with 5 losing years and a cumulative curve that never went positive. The "
         "median three-month window has a profit factor of 0.996 &mdash; a coin "
@@ -470,6 +573,22 @@ def main(argv=None) -> int:
     }
 
     first, last = trades["entry_ts"].min(), trades["exit_ts"].max()
+    plan = rebuy(trades)
+    costs = {name: path_cost(path, plan["accounts"], plan["days"], plan["passed"])
+             for name, path in PATHS.items()}
+    cheapest = min(costs, key=lambda n: costs[n]["total"])
+    other = next(n for n in costs if n != cheapest)
+    gap = costs[other]["total"] - costs[cheapest]["total"]
+    path_note = (
+        f"{cheapest} is ${gap:,.0f} cheaper here. The activation fee is charged "
+        f"once per funded account earned, so a run of failures never pays it \u2014 "
+        f"No-Activation spends ${PATHS['No-Activation']['monthly'] - PATHS['Standard']['monthly']:,.0f} "
+        f"more every month AND on every reset to buy away a fee you only owe "
+        f"after you have already won. It comes out ahead only while months plus "
+        f"paid resets stay under about four; this year needed "
+        f"{costs[cheapest]['months'] + costs[cheapest]['reset_count']}."
+    )
+
     lad = ladder(bars, args.start, args.end)
     survivors = [r for r in lad if r["outcome"] != "busted"]
     if survivors:
@@ -492,6 +611,9 @@ def main(argv=None) -> int:
         "quarters": q,
         "ladder": lad,
         "ladder_note": note,
+        "rebuy": plan,
+        "costs": costs,
+        "path_note": path_note,
         "breach_index": breach_i,
         "breach_date": (None if breach_i is None else
                         trades["exit_ts"].iloc[breach_i].tz_convert(NY).date().isoformat()),
@@ -517,6 +639,12 @@ def main(argv=None) -> int:
         print(f"breached -${LOSS_LIMIT:,.0f} at trade {breach_i + 1} "
               f"({ctx['breach_date']}); {ctx['below_limit']}/{len(trades)} "
               f"points below the limit")
+    print(f"re-buy: {plan['accounts']} accounts over {plan['days']} days, "
+          f"passed={plan['passed']}")
+    for name, c in costs.items():
+        print(f"  {name:<15} ${c['total']:,.0f}  "
+              f"(sub ${c['subscription']:,.0f} + resets ${c['paid_resets']:,.0f} "
+              f"+ api ${c['api_access']:,.0f} + activation ${c['activation']:,.0f})")
     print(f"wrote {out}")
     return 0
 

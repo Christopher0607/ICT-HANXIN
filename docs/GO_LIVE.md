@@ -64,7 +64,7 @@ subscription**」—— 沒有 Combine 就沒有 Practice。所以不可能「�
 
 | # | 做什麼 | 花費 | 過關條件 |
 |---|---|---|---|
-| 1 | 買 Combine + **API Access**（代碼 `topstep`），拿到 API 金鑰 | **~$100/月** | —— |
+| 1 | 買 Combine（**Standard**）+ **API Access**（代碼 `topstep`），拿到金鑰 | **~$64/月** | —— |
 | 2 | Dashboard → Accounts → Add-ons → 啟用 **Practice Account** | 0 | —— |
 | 3 | `--preflight --offline`（不連線，只驗設定與算術） | 0 | 全綠 |
 | 4 | `TOPSTEPX_ACCOUNT_ID` 指向 **Practice**，`--preflight` | 0 | **餘額是 ~$150,000** |
@@ -77,15 +77,60 @@ subscription**」—— 沒有 Combine 就沒有 Practice。所以不可能「�
 （別為了讓它跑而填一個假的金鑰：這個專案刻意不讓任何地方有預設密鑰，
 因為假密鑰會在真正需要它的那天還是假的。）
 
-### 月費是兩筆，不是一筆
+### 費用：兩條路徑，選 Standard
 
-| | |
-|---|---|
-| Trading Combine 50K | $85/月 |
-| **TopstepX API Access** | **$29/月，用代碼 `topstep` 是 $14.50** |
+Topstep 的 50K 有兩條定價路徑（數字來自你自己的 dashboard，2026-09-13）：
 
-API Access 由 ProjectX 分開計費（帳單顯示 Sim2Funded Solutions），
-**沒有它就沒有 API 金鑰**，這座橋一行都跑不動。合計約 **$100/月**。
+| | **Standard** | No-Activation Fee |
+|---|---|---|
+| 月費 | **$49** | $95，RTA 折扣後 **$85** |
+| Reset | **$49** | **$85** |
+| 月費續訂送 reset credit | Included | Included |
+| Activation | **$149**，**只在拿到 funded 帳戶時收一次** | $0 |
+
+**選 Standard。** 關鍵是 activation 的收費時機 ——
+官方寫的是「charged once per XFA **earned**」，**爆十次不收，通過才收**。
+No-Activation 用「每個月多 $36、**每次重置也多 $36**」去買一個
+「只有贏了才要付的 $149」。
+
+> **「月數 + 付費重置次數」合計少於約 4，No-Activation 才划算。**
+
+這一年的重播是 4 個月 + 7 次付費重置 = **11**，遠超過。
+完整明細在季度報告的「Busting and re-buying」那一節。
+
+另外一筆：**TopstepX API Access $29/月，用代碼 `topstep` 是 $14.50**，
+由 ProjectX 分開計費（帳單顯示 Sim2Funded Solutions）。
+**沒有它就沒有 API 金鑰**，這座橋一行都跑不動。
+
+### Responsible Trading Advantage：開著
+
+它帶一條 **$1,000 每日虧損上限**。乍看是個問題 —— 實測 $1,000/單時，
+87 個虧損日裡有 30 個（34%）虧超過 $1,000，因為手續費讓實際虧損略超風險額。
+
+**但踩到它不是違規。** 官方原文：
+
+> Triggering it is not a rule violation — it's a forced break for the rest of
+> that session. Account stays eligible for funding.
+
+它只鎖住當天剩下的時間，而**我們一天只做一單** ——
+觸發的時候那一單早就結束了。鎖住的是我們本來也不會用到的時間。
+代價接近零，還附帶 DOUBLE Payout Caps（Standard 沒有 −$10 折扣，No-Activation 才有）。
+
+### 一致性目標 55%：現在不咬，但它設了天花板
+
+**最佳單日不得超過獲利目標的 55%**，50K 就是 **$1,650**。
+超過不是失敗，是獲利目標升到 `最佳單日 ÷ 0.55`。
+
+一天一單、1:1 停利，所以單日獲利約等於單筆風險：
+
+| 風險/單 | 最佳單日 | 佔目標 | |
+|---|---|---|---|
+| $1,000 | $985 | 33% | 安全 |
+| $1,500 | $1,478 | 49% | 安全 |
+| $2,000 | $1,970 | 66% | **目標升到 $3,582** |
+
+`--preflight` 會照你的 `--risk` 印出這一行並在超標時變紅，
+所以不必記這張表，但要知道**風險開到 ~$1,650/單 以上就會開始自我妨礙**。
 
 ---
 
@@ -192,7 +237,7 @@ Practice 每天有 10 次免費重置，錯了重來不花錢；考試帳戶爆�
 
 考試階段把守衛關掉是反直覺的，理由在 `tradingview/README.md`：
 守衛把爆倉換成「停手」，而停手既不通過也不爆倉、月費照走 ——
-實測通過率從 35% 掉到 10%。考試 $85 買得回，funded 買不回，所以兩邊反過來。
+實測通過率從 35% 掉到 10%。考試 $49 買得回，funded 買不回，所以兩邊反過來。
 
 ---
 

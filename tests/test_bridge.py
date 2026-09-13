@@ -36,7 +36,7 @@ def cfg(**over) -> Config:
         preset="Topstep 50K",
         account_start=50000.0, profit_target=3000.0, max_loss_limit=2000.0,
         daily_loss_limit=1000.0, max_contracts=50, safety_mult=1.5,
-        use_guard=True, scaling_plan=False,
+        use_guard=True, scaling_plan=False, consistency=0.55,
     )
     base.update(over)
     return Config(**base)
@@ -119,6 +119,42 @@ def test_the_express_funded_scaling_cap_follows_the_balance():
     assert clamp_size(40, c, realized=2000.0) == 40
     # off by default, so an evaluation keeps the flat ceiling
     assert scaling_cap(0.0, cfg()) == 50
+
+
+def test_the_consistency_target_is_not_in_the_preset_tuple():
+    """It exists on one side only, so it must not weaken the cross-check.
+
+    ``PRESETS`` is the set of numbers that also live in the Pine guard, and the
+    test above reads them back out of the Pine source to prove the two agree.
+    Consistency has no Pine counterpart; putting it in that tuple would mean the
+    comparison silently stopped covering everything in it.
+    """
+    from bridge.config import CONSISTENCY
+    assert all(len(v) == 4 for v in PRESETS.values())
+    assert set(CONSISTENCY) == set(PRESETS), "every preset needs an answer, even None"
+    assert CONSISTENCY["Topstep 50K"] == 0.55
+    assert CONSISTENCY["Apex 50K EOD"] is None, "unverified must read as unverified"
+
+
+def test_the_best_day_cap_follows_the_target():
+    """$50K: 55% of a $3,000 target is $1,650 in a single day."""
+    assert cfg().best_day_cap() == pytest.approx(1650.0)
+    assert cfg(preset="Topstep 100K", profit_target=6000.0).best_day_cap() == pytest.approx(3300.0)
+    assert cfg(consistency=None).best_day_cap() is None
+
+
+def test_one_trade_a_day_at_the_planned_risk_stays_under_the_cap():
+    """The premise that lets us ignore the consistency rule at 2% risk.
+
+    One trade a day at a 1:1 target means a winning day is about one unit of
+    risk. $1,000 against a $1,650 cap has room; $2,000 does not, and exceeding
+    it does not fail the account -- it raises the profit target, which is a
+    thing you notice weeks later while wondering why you have not passed.
+    """
+    cap = cfg().best_day_cap()
+    assert 1000.0 <= cap, "2% of a 50K must clear the consistency cap"
+    assert 2000.0 > cap, "and the cap must actually bind somewhere above it"
+    assert 2000.0 / 0.55 == pytest.approx(3636.36, abs=0.01), "the raised target"
 
 
 # --------------------------------------------------------------------------

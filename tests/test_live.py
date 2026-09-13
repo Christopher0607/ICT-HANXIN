@@ -45,7 +45,7 @@ def cfg(**over) -> Config:
         webhook_secret="", live=False, live_data=False, cutoff_minute=15 * 60 + 30, flat_minute=16 * 60,
         max_bar_age_s=150.0, preset="Topstep 50K", account_start=50000.0,
         profit_target=3000.0, max_loss_limit=2000.0, daily_loss_limit=1000.0,
-        max_contracts=50, safety_mult=1.5, use_guard=False, scaling_plan=False,
+        max_contracts=50, safety_mult=1.5, use_guard=False, scaling_plan=False, consistency=0.55,
     )
     base.update(over)
     return Config(**base)

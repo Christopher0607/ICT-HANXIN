@@ -36,7 +36,8 @@ def _mask(value: str) -> str:
     return f"{len(value)} chars ending {value[-4:]}" if len(value) > 8 else "(too short)"
 
 
-def run(cfg: Config, reach_broker: bool = True, need_webhook: bool = True) -> list[Check]:
+def run(cfg: Config, reach_broker: bool = True, need_webhook: bool = True,
+        risk_usd: float = 1000.0) -> list[Check]:
     """Every check, in the order they would bite. Never raises.
 
     ``need_webhook`` is false for the local signal engine, which has no inbound
@@ -67,6 +68,27 @@ def run(cfg: Config, reach_broker: bool = True, need_webhook: bool = True) -> li
                      f"{cap} micros at $0 balance"
                      + (" (Express Funded scaling ON)" if cfg.scaling_plan
                         else " (flat evaluation cap)")))
+
+    cap = cfg.best_day_cap()
+    if cap is None:
+        out.append(Check("consistency target", True,
+                         f"not checked for {cfg.preset} -- confirm it on the firm's own "
+                         "dashboard before relying on this"))
+    else:
+        # One trade a day at a 1:1 target means a winning day is about one unit
+        # of risk, so the rule binds only once risk approaches the cap. Worth
+        # showing rather than assuming: exceeding it does not fail the account,
+        # it raises the profit target, which is the kind of thing you notice
+        # weeks later while wondering why you have not passed.
+        biggest = risk_usd
+        out.append(Check("consistency target", biggest <= cap,
+                         f"best day may not exceed ${cap:,.0f} "
+                         f"({cfg.consistency:.0%} of the ${cfg.profit_target:,.0f} target). "
+                         f"One trade a day at ${biggest:,.0f} risk tops out near "
+                         f"${biggest:,.0f}"
+                         + ("" if biggest <= cap else
+                            f" -- over the cap, so the target would rise to "
+                            f"${biggest / cfg.consistency:,.0f}")))
 
     out.append(Check("session window", 0 < cfg.cutoff_minute <= 16 * 60,
                      f"places orders until {cfg.cutoff_minute // 60:02d}:"

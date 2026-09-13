@@ -24,6 +24,20 @@ PRESETS: dict[str, tuple[float, float, float, int]] = {
     "Apex 100K EOD": (6000.0, 3000.0, 1e9, 40),
 }
 
+#: Best single day, as a share of the profit target, before the target starts
+#: rising: ``adjusted = best_day / consistency``. Not a failure -- it moves the
+#: goalposts. Deliberately NOT part of PRESETS: that tuple is the set of numbers
+#: that exist in the Pine guard too, and tests/test_bridge.py reads them back out
+#: of the Pine source to prove the two agree. A value only one side has would
+#: weaken exactly the thing that test is for.
+#:
+#: Topstep's own figure, read off the dashboard 2026-09-13. Apex is None because
+#: it has not been checked -- the same reason its rows carry a warning above.
+CONSISTENCY: dict[str, float | None] = {
+    "Topstep 50K": 0.55, "Topstep 100K": 0.55, "Topstep 150K": 0.55,
+    "Apex 50K EOD": None, "Apex 100K EOD": None,
+}
+
 MISSING = object()
 
 
@@ -67,6 +81,11 @@ class Config:
     safety_mult: float
     use_guard: bool
     scaling_plan: bool
+    consistency: float | None
+
+    def best_day_cap(self) -> float | None:
+        """Largest single day that does not push the profit target up."""
+        return None if self.consistency is None else self.profit_target * self.consistency
 
     @classmethod
     def from_env(cls, live: bool = False, need_webhook: bool = False) -> "Config":
@@ -113,4 +132,5 @@ class Config:
             # is the deliberate exception, not the default.
             use_guard=_env("BRIDGE_USE_GUARD", "1") not in ("0", "false", "False"),
             scaling_plan=_env("BRIDGE_SCALING_PLAN", "0") not in ("0", "false", "False"),
+            consistency=CONSISTENCY.get(preset),
         )

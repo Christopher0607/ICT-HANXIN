@@ -445,7 +445,8 @@ def main(argv=None) -> int:
         from .preflight import report, run as preflight
         print(f"preflight: {cfg.preset} on {cfg.base_url}\n")
         return 0 if report(preflight(cfg, reach_broker=not args.offline,
-                                     need_webhook=False)) else 1
+                                     need_webhook=False,
+                                     risk_usd=args.risk)) else 1
 
     broker = TopstepXBroker(cfg) if args.live else DryRunBroker(cfg)
     broker.authenticate()
