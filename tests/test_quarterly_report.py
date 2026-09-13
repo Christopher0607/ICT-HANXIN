@@ -34,13 +34,24 @@ def test_the_peak_resets_with_the_account():
     assert out["accounts"] == 3, "breach at -2,000 from 2,500, then again from 0"
 
 
-def test_activation_is_free_until_you_win():
-    """The whole reason No-Activation is poor value for a re-buy plan."""
+def test_activation_is_charged_per_funded_account_earned():
+    """Not once ever -- once for each XFA earned.
+
+    A run of failures never pays it, which is the whole reason No-Activation is
+    poor value for a re-buy plan. But lose the funded account and pass again and
+    it lands again, so two cycles is two fees. ``path_cost`` covers one cycle
+    because the replay stops at the first pass.
+    """
     lost = path_cost(PATHS["Standard"], accounts=11, days=104, passed=False)
     won = path_cost(PATHS["Standard"], accounts=11, days=104, passed=True)
-    assert lost["activation"] == 0.0
+    assert lost["activation"] == 0.0, "failures alone never trigger it"
     assert won["activation"] == 149.0
     assert won["total"] - lost["total"] == 149.0
+
+    # Two funded accounts earned is two activations -- the fee is per XFA, so
+    # nothing about it is amortised across cycles.
+    two_cycles = 2 * won["activation"]
+    assert two_cycles == 298.0
 
 
 def test_every_rebill_banks_one_free_reset():

@@ -56,7 +56,7 @@ API_MONTHLY = 14.50
 #: Position sizes to show side by side. The spread matters more than the exact
 #: values: it is the difference between a size that survives and one that does
 #: not.
-RISK_LADDER = (100.0, 200.0, 250.0, 500.0, 1000.0)
+RISK_LADDER = (100.0, 200.0, 250.0, 500.0, 900.0, 1000.0)
 
 # Validated with the dataviz skill's checker against both surfaces:
 # light  worst adjacent CVD dE 21.6, normal-vision 32.3, all >= 3:1
@@ -227,6 +227,28 @@ def esc(text) -> str:
     return html.escape(str(text))
 
 
+def t(zh: str, en: str) -> str:
+    """One phrase in both languages; CSS shows whichever is selected.
+
+    Chinese is the default and is what shows with JavaScript disabled -- the
+    toggle only ever adds a class. A page that needs script to render any text
+    at all is a page that can arrive blank.
+
+    The arguments are already-escaped HTML, because most call sites need a
+    ``<b>`` somewhere; anything interpolated from data goes through ``esc``
+    first.
+    """
+    return f'<span class="zh">{zh}</span><span class="en">{en}</span>'
+
+
+def svg_t(zh: str, en: str, **attrs) -> str:
+    """The same, for SVG. Chart labels are text too: a half-translated chart is
+    the first thing anyone notices after switching language."""
+    a = " ".join(f'{k.replace("_", "-")}="{v}"' for k, v in attrs.items())
+    return (f'<text class="tick zh" {a}>{esc(zh)}</text>'
+            f'<text class="tick en" {a}>{esc(en)}</text>')
+
+
 def line_chart(xs, ys, *, width=380, height=155, limit=None, fill=False) -> str:
     """One series over trade number. Optional threshold line and fill to zero."""
     pad_l, pad_r, pad_t, pad_b = 56, 10, 20, 20
@@ -256,17 +278,20 @@ def line_chart(xs, ys, *, width=380, height=155, limit=None, fill=False) -> str:
                      f'x2="{width - pad_r}" y2="{y:.1f}"/>')
         parts.append(f'<line class="limit" x1="{width - pad_r - 142}" y1="10" '
                      f'x2="{width - pad_r - 126}" y2="10"/>')
-        parts.append(f'<text class="limit-label" x="{width - pad_r}" y="13.5" '
-                     f'text-anchor="end">loss limit &minus;${LOSS_LIMIT:,.0f}</text>')
+        parts.append(
+            f'<text class="limit-label zh" x="{width - pad_r}" y="13.5" '
+            f'text-anchor="end">虧損上限 &minus;${LOSS_LIMIT:,.0f}</text>'
+            f'<text class="limit-label en" x="{width - pad_r}" y="13.5" '
+            f'text-anchor="end">loss limit &minus;${LOSS_LIMIT:,.0f}</text>')
     parts.append(f'<polyline class="series" points="{points}"/>')
 
     for value in (hi, lo):
         label = "0" if value == 0 else money(value)
         parts.append(f'<text class="tick" x="{pad_l - 6}" y="{py(value) + 3.5:.1f}" '
                      f'text-anchor="end">{esc(label)}</text>')
-    parts.append(f'<text class="tick" x="{pad_l}" y="{height - 5}">trade 1</text>')
-    parts.append(f'<text class="tick" x="{width - pad_r}" y="{height - 5}" '
-                 f'text-anchor="end">trade {len(xs)}</text>')
+    parts.append(svg_t("第 1 筆", "trade 1", x=pad_l, y=height - 5))
+    parts.append(svg_t(f"第 {len(xs)} 筆", f"trade {len(xs)}",
+                       x=width - pad_r, y=height - 5, text_anchor="end"))
     return (f'<svg viewBox="0 0 {width} {height}" role="img" '
             f'preserveAspectRatio="xMidYMid meet">{"".join(parts)}</svg>')
 
@@ -352,6 +377,19 @@ svg{width:100%;max-width:560px;height:auto;display:block;margin-inline:auto}
 .bar-value{fill:var(--ink-2);font-size:11px;font-weight:600}
 .bar.pos{fill:var(--pos)}.bar.neg{fill:var(--neg)}
 .caveats li{margin:7px 0;color:var(--ink-2)}
+/* Chinese is what renders with no JavaScript: the toggle only adds a class,
+   so a script that never runs leaves a readable page rather than a blank one. */
+.en{display:none}
+html.lang-en .zh{display:none}
+html.lang-en .en{display:inline}
+text.en{display:none}
+html.lang-en text.zh{display:none}
+html.lang-en text.en{display:inline}
+.langbar{display:flex;justify-content:flex-end;margin-bottom:10px}
+.langbar button{font:inherit;font-size:13px;padding:5px 13px;cursor:pointer;
+background:var(--card);color:var(--ink-2);border:1px solid var(--rule);
+border-radius:999px}
+.langbar button:hover{color:var(--ink)}
 .muted{color:var(--ink-3);font-weight:400}
 footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--rule);
 color:var(--ink-3);font-size:12.5px}
@@ -359,14 +397,18 @@ color:var(--ink-3);font-size:12.5px}
 
 
 def tile(key: str, value: str, note: str = "", cls: str = "") -> str:
+    """Key and note are already-escaped HTML -- they carry the bilingual spans,
+    so escaping them here would print the markup instead of rendering it."""
     note_html = f'<div class="n">{note}</div>' if note else ""
-    return (f'<div class="tile"><div class="k">{esc(key)}</div>'
+    return (f'<div class="tile"><div class="k">{key}</div>'
             f'<div class="v {cls}">{value}</div>{note_html}</div>')
 
 
 def quarter_table(q: pd.DataFrame, totals: dict) -> str:
-    head = ("<tr><th>quarter</th><th>trades</th><th>win rate</th><th>avg R</th>"
-            "<th>net P&amp;L</th><th>max drawdown</th><th>profit factor</th></tr>")
+    head = "<tr>" + "".join(f"<th>{t(zh, en)}</th>" for zh, en in (
+        ("季度", "quarter"), ("交易", "trades"), ("勝率", "win rate"),
+        ("平均 R", "avg R"), ("淨損益", "net P&amp;L"),
+        ("最大回撤", "max drawdown"), ("獲利因子", "profit factor"))) + "</tr>"
     body = "".join(
         f"<tr><td>{esc(r.period)}</td><td>{int(r.trades)}</td>"
         f"<td>{r.win_rate:.1%}</td><td>{r.avg_r:+.3f}</td>"
@@ -374,7 +416,7 @@ def quarter_table(q: pd.DataFrame, totals: dict) -> str:
         f"<td>{esc(money(r.max_drawdown))}</td>"
         f"<td>{r.profit_factor:.2f}</td></tr>"
         for r in q.itertuples())
-    foot = (f'<tr class="total"><td>all four</td><td>{totals["trades"]}</td>'
+    foot = (f'<tr class="total"><td>{t("四季合計", "all four")}</td><td>{totals["trades"]}</td>'
             f'<td>{totals["win_rate"]:.1%}</td><td>{totals["avg_r"]:+.3f}</td>'
             f'<td>{esc(money(totals["net"]))}</td>'
             f'<td>{esc(money(totals["max_drawdown"]))}</td>'
@@ -383,7 +425,8 @@ def quarter_table(q: pd.DataFrame, totals: dict) -> str:
             f'<tbody>{body}{foot}</tbody></table></div>')
 
 
-OUTCOME_WORD = {"busted": "busted", "passed": "passed", "neither": "survived"}
+OUTCOME_WORD = {"busted": ("爆倉", "busted"), "passed": ("通過", "passed"),
+                "neither": ("撐過", "survived")}
 
 
 def cost_table(costs: dict) -> str:
@@ -391,9 +434,11 @@ def cost_table(costs: dict) -> str:
     reads as though it was forgotten -- and this table is read to make a
     decision, so anything left out is a number argued about later."""
     rows = ["subscription", "paid_resets", "api_access", "activation"]
-    label = {"subscription": "monthly subscription", "paid_resets": "paid resets",
-             "api_access": "API access", "activation": "activation fee"}
-    head = "<tr><th>cost</th>" + "".join(
+    label = {"subscription": t("月費", "monthly subscription"),
+             "paid_resets": t("付費重置", "paid resets"),
+             "api_access": t("API access", "API access"),
+             "activation": t("啟用費", "activation fee")}
+    head = f'<tr><th>{t("項目", "cost")}</th>' + "".join(
         f"<th>{esc(name)}</th>" for name in costs) + "</tr>"
     body = ""
     for key in rows:
@@ -401,20 +446,29 @@ def cost_table(costs: dict) -> str:
         note = ""
         if key == "paid_resets":
             first = next(iter(costs.values()))
-            note = (f' <span class="muted">({first["reset_count"]} paid after '
-                    f'{first["free_credits"]} free credits)</span>')
+            note = (' <span class="muted">' + t(
+                f'（{first["reset_count"]} 次付費，扣掉 {first["free_credits"]} 次免費額度）',
+                f'({first["reset_count"]} paid after {first["free_credits"]} free credits)')
+                + '</span>')
         if key == "activation":
-            note = ' <span class="muted">(charged only on success)</span>'
+            # Per XFA EARNED, not once ever: lose a funded account,
+            # pass again, and it is charged again. This replay stops at
+            # the first pass, so it counts one.
+            note = (' <span class="muted">' + t(
+                "（每拿到一個 funded 帳戶收一次）",
+                "(per funded account earned)") + '</span>')
         body += f"<tr><td>{label[key]}{note}</td>{cells}</tr>"
     totals = "".join(f'<td>${esc(money(c["total"], sign=False))}</td>' for c in costs.values())
-    body += f'<tr class="total"><td>total to pass</td>{totals}</tr>'
+    body += f'<tr class="total"><td>{t("通過的總花費", "total to pass")}</td>{totals}</tr>'
     return (f'<div class="scroll"><table><thead>{head}</thead>'
             f'<tbody>{body}</tbody></table></div>')
 
 
 def ladder_table(rows: list[dict]) -> str:
-    head = ("<tr><th>risk / trade</th><th>trades</th><th>net P&amp;L</th>"
-            "<th>max drawdown</th><th>first breach</th><th>outcome</th></tr>")
+    head = "<tr>" + "".join(f"<th>{t(zh, en)}</th>" for zh, en in (
+        ("每單風險", "risk / trade"), ("交易", "trades"), ("淨損益", "net P&amp;L"),
+        ("最大回撤", "max drawdown"), ("首次觸限", "first breach"),
+        ("結果", "outcome"))) + "</tr>"
     cells = []
     for r in rows:
         when = ("&mdash;" if r["at_trade"] is None
@@ -424,118 +478,182 @@ def ladder_table(rows: list[dict]) -> str:
             f'<tr><td>${r["risk"]:,.0f}</td><td>{r["trades"]}</td>'
             f'<td>{esc(money(r["net"]))}</td>'
             f'<td>{esc(money(r["max_drawdown"]))}</td><td>{when}</td>'
-            f'<td><span class="pill {pill}">{OUTCOME_WORD[r["outcome"]]}</span></td></tr>')
+            f'<td><span class="pill {pill}">{t(*OUTCOME_WORD[r["outcome"]])}'
+            f'</span></td></tr>')
     return (f'<div class="scroll"><table><thead>{head}</thead>'
             f'<tbody>{"".join(cells)}</tbody></table></div>')
 
 
 def build(ctx: dict) -> str:
-    """The whole page. Composed from pieces rather than one giant f-string."""
-    t, q, lad = ctx["totals"], ctx["quarters"], ctx["ladder"]
+    """The whole page, in both languages. Composed from pieces, not one f-string."""
+    tot, q, lad = ctx["totals"], ctx["quarters"], ctx["ladder"]
     breach_i = ctx["breach_index"]
     below = ctx["below_limit"]
+    risk = ctx["risk"]
+    plan = ctx["rebuy"]
 
     tiles = "".join([
-        tile("net P&L", esc(money(t["net"])), f'{t["trades"]} trades',
-             "up" if t["net"] >= 0 else "down"),
-        tile("win rate", f'{t["win_rate"]:.1%}',
-             f'break-even is {t["breakeven"]:.1%} after costs'),
-        tile("profit factor", f'{t["profit_factor"]:.2f}',
-             f'longest losing streak {t["streak"]}'),
-        tile("max drawdown", esc(money(t["max_drawdown"])),
-             f'limit is <span class="nb">\u2212${LOSS_LIMIT:,.0f}</span>', "bad"),
+        tile(t("淨損益", "net P&L"), esc(money(tot["net"])),
+             t(f'{tot["trades"]} 筆交易', f'{tot["trades"]} trades'),
+             "up" if tot["net"] >= 0 else "down"),
+        tile(t("勝率", "win rate"), f'{tot["win_rate"]:.1%}',
+             t(f'扣掉成本後的損益兩平點是 {tot["breakeven"]:.1%}',
+               f'break-even is {tot["breakeven"]:.1%} after costs')),
+        tile(t("獲利因子", "profit factor"), f'{tot["profit_factor"]:.2f}',
+             t(f'最長連敗 {tot["streak"]} 筆',
+               f'longest losing streak {tot["streak"]}')),
+        tile(t("最大回撤", "max drawdown"), esc(money(tot["max_drawdown"])),
+             t(f'上限是 <span class="nb">\u2212${LOSS_LIMIT:,.0f}</span>',
+               f'limit is <span class="nb">\u2212${LOSS_LIMIT:,.0f}</span>'), "bad"),
     ])
 
     if breach_i is None:
-        verdict = (f'<div class="verdict"><b>The drawdown never reached the '
-                   f'&minus;${LOSS_LIMIT:,.0f} limit</b> at ${ctx["risk"]:,.0f} a trade.</div>')
+        verdict = '<div class="verdict">' + t(
+            f'<b>在 ${risk:,.0f} 的單筆風險下，回撤從來沒有碰到 '
+            f'\u2212${LOSS_LIMIT:,.0f} 的上限。</b>',
+            f'<b>The drawdown never reached the \u2212${LOSS_LIMIT:,.0f} limit</b> '
+            f'at ${risk:,.0f} a trade.') + '</div>'
     else:
-        verdict = (
-            f'<div class="verdict">'
-            f'<b>At ${ctx["risk"]:,.0f} a trade this year was not tradeable.</b> '
-            f'The drawdown passed the &minus;${LOSS_LIMIT:,.0f} loss limit on '
+        share = below / tot["trades"]
+        verdict = '<div class="verdict">' + t(
+            f'<b>在 ${risk:,.0f} 的單筆風險下，這一年是跑不完的。</b>'
+            f'回撤在<b>第 {breach_i + 1} 筆、{esc(ctx["breach_date"])}</b>'
+            f'穿過 \u2212${LOSS_LIMIT:,.0f} 的虧損上限 —— 距離這段期間的第一筆'
+            f'{esc(ctx["breach_gap_zh"])}。下面那條曲線的 {tot["trades"]} 個點裡'
+            f'有 {below} 個在那條線以下，也就是這一年有 {share:.0%} 的時間'
+            f'帳戶早就被關掉了。最後那個 {esc(money(tot["net"]))} 沒有人領得到。',
+            f'<b>At ${risk:,.0f} a trade this year was not tradeable.</b> '
+            f'The drawdown passed the \u2212${LOSS_LIMIT:,.0f} loss limit on '
             f'<b>trade {breach_i + 1}</b>, on {esc(ctx["breach_date"])} &mdash; '
             f'{esc(ctx["breach_gap"])} after the first trade of the window. '
-            f'{below} of the {t["trades"]} points on the curve below sit under that '
-            f'line, so for {below / t["trades"]:.0%} of the year the account had '
-            f'already been closed. The {esc(money(t["net"]))} at the end is a number '
-            f'nobody collects.</div>')
+            f'{below} of the {tot["trades"]} points on the curve below sit under '
+            f'that line, so for {share:.0%} of the year the account had already '
+            f'been closed. The {esc(money(tot["net"]))} at the end is a number '
+            f'nobody collects.') + '</div>'
+
+    caveats = [
+        ("<b>這是回測，不是實績。</b>這裡沒有任何一張單真的送出去過。"
+         "七個 TopstepX 端點都是照文件寫的，從來沒有對過真的伺服器。",
+         "<b>A backtest, not a track record.</b> No order here was ever sent. "
+         "The seven TopstepX endpoints are written from documentation and have "
+         "never run against the live server."),
+        ("<b>成交模型偏向它。</b>限價單在價格「碰到」時就算成交；真實的限價單要"
+         "排隊，有時候根本不會成交。",
+         "<b>The fill model favours it.</b> A limit order fills when price "
+         "touches it; a real one waits in a queue and sometimes never fills at all."),
+        ("<b>資料源不同。</b>這是 Databento GLBX.MDP3 的 K 棒，不是 TopstepX 的行情。"
+         "掃針只要穿透一檔就成立，而那正是兩個資料源最容易不一致的地方。",
+         "<b>Different data.</b> These are Databento GLBX.MDP3 bars, not "
+         "TopstepX's feed. A sweep qualifies on one tick of penetration, which "
+         "is exactly where two feeds disagree."),
+        (f"<b>一致性規則沒有算進這裡。</b>單日獲利不得超過獲利目標的 55%"
+         f"（50K 是 $1,650），超過的話目標會往上調。一天一單、1:1 停利，"
+         f"所以單日獲利約等於單筆風險 —— ${risk:,.0f} 還有空間，"
+         f"但這條規則在 $1,650/單 附近設了天花板。",
+         f"<b>The consistency target is not modelled here.</b> A single day may "
+         f"not exceed 55% of the profit target ($1,650 on a 50K) or the target "
+         f"rises. One trade a day at a 1:1 target makes a winning day about one "
+         f"unit of risk, so ${risk:,.0f} has room &mdash; but it caps position "
+         f"size near $1,650 a trade."),
+        (f"<b>資料截止 {esc(ctx['data_end'])}。</b>最後一季是不完整的。",
+         f"<b>Data ends {esc(ctx['data_end'])}.</b> The last quarter is partial."),
+        ("<b>完整 11 年是 \u2212$3,044</b>，2,161 筆交易、5 年虧損，"
+         "而且累計曲線從來沒有轉正過。三個月視窗的中位獲利因子是 0.996 —— "
+         "等於擲硬幣。當前這個視窗落在那些視窗的第 98 百分位。"
+         "一個好年頭不能解決這件事；只有還沒有人看過的 K 棒可以。",
+         "<b>The eleven-year record is \u2212$3,044</b> across 2,161 trades, "
+         "with 5 losing years and a cumulative curve that never went positive. "
+         "The median three-month window has a profit factor of 0.996 &mdash; a "
+         "coin flip. This window sits in the 98th percentile of those. One good "
+         "year does not settle that; only bars nobody has seen yet can."),
+    ]
 
     return "\n".join([
         f"<title>{esc(ctx['title'])}</title>",
         f"<style>{STYLE}</style>",
         '<div class="wrap">',
-        f"<h1>{esc(ctx['title'])}</h1>",
-        f'<p class="sub">{esc(ctx["subtitle"])}</p>',
+        '<div class="langbar"><button type="button" id="lang">English</button></div>',
+        f'<h1>{t(esc(ctx["title_zh"]), esc(ctx["title"]))}</h1>',
+        f'<p class="sub">{t(esc(ctx["subtitle_zh"]), esc(ctx["subtitle"]))}</p>',
         f'<div class="tiles">{tiles}</div>',
         verdict,
 
-        "<h2>Cumulative profit and loss</h2>",
-        f'<p>Every filled trade in order, at ${ctx["risk"]:,.0f} of risk each. '
-        f'Three winning quarters and one bad one.</p>',
+        f'<h2>{t("累計損益", "Cumulative profit and loss")}</h2>',
+        "<p>" + t(f"每一筆成交依序排列，每單風險 ${risk:,.0f}。三個獲利季，一個壞季。",
+                  f"Every filled trade in order, at ${risk:,.0f} of risk each. "
+                  f"Three winning quarters and one bad one.") + "</p>",
         f'<div class="card">{ctx["equity_svg"]}</div>',
 
-        "<h2>Drawdown from the running peak</h2>",
-        "<p>This is the line the account actually lives on. A loss limit trails "
-        "the high-water mark, so what closes an account is the fall from the peak "
-        "&mdash; not whether the balance is up. The dashed line is the limit.</p>",
+        f'<h2>{t("從高點起算的回撤", "Drawdown from the running peak")}</h2>',
+        "<p>" + t("這才是帳戶真正活在上面的那條線。虧損上限是跟著最高點走的，"
+                  "所以關掉帳戶的是「從高點跌下來多少」，不是餘額是不是正的。"
+                  "虛線就是那個上限。",
+                  "This is the line the account actually lives on. A loss limit "
+                  "trails the high-water mark, so what closes an account is the "
+                  "fall from the peak &mdash; not whether the balance is up. The "
+                  "dashed line is the limit.") + "</p>",
         f'<div class="card">{ctx["drawdown_svg"]}</div>',
 
-        "<h2>By quarter</h2>",
+        f'<h2>{t("逐季", "By quarter")}</h2>',
         f'<div class="card">{ctx["quarter_svg"]}</div>',
-        quarter_table(q, t),
+        quarter_table(q, tot),
 
-        "<h2>What each position size would have done</h2>",
-        "<p>The same trades, sized differently. &ldquo;First breach&rdquo; is the "
-        "trade whose drawdown passed the loss limit; &ldquo;outcome&rdquo; is "
-        "whichever came first &mdash; the "
-        f"${PROFIT_TARGET:,.0f} profit target or the "
-        f"&minus;${LOSS_LIMIT:,.0f} limit.</p>",
+        f'<h2>{t("換成別的倉位大小會怎樣", "What each position size would have done")}</h2>',
+        "<p>" + t(f"同一批交易，只改倉位。「首次觸限」是回撤穿過虧損上限的那一筆；"
+                  f"「結果」是 ${PROFIT_TARGET:,.0f} 的獲利目標和 "
+                  f"\u2212${LOSS_LIMIT:,.0f} 的上限，哪一個先到。",
+                  f"The same trades, sized differently. &ldquo;First breach&rdquo; "
+                  f"is the trade whose drawdown passed the loss limit; "
+                  f"&ldquo;outcome&rdquo; is whichever came first &mdash; the "
+                  f"${PROFIT_TARGET:,.0f} profit target or the "
+                  f"\u2212${LOSS_LIMIT:,.0f} limit.") + "</p>",
         ladder_table(lad),
-        f'<p>{esc(ctx["ladder_note"])}</p>',
+        f'<p>{t(esc(ctx["ladder_note_zh"]), esc(ctx["ladder_note"]))}</p>',
 
-        "<h2>Busting and re-buying: what the year would have cost</h2>",
-        f'<p>Walking the same trades in order and buying a fresh account after '
-        f'every breach. At ${ctx["risk"]:,.0f} a trade that is '
-        f'<b>{ctx["rebuy"]["accounts"]} accounts over {ctx["rebuy"]["days"]} days</b>, '
-        f'and the last one passed. Re-buying works &mdash; it is just more '
-        f'accounts and more months than a shuffled estimate suggests, because '
-        f'the losing quarter arrives as one run rather than spread out.</p>',
+        f'<h2>{t("爆了再買，這一年要花多少", "Busting and re-buying: what the year would have cost")}</h2>',
+        "<p>" + t(f"同一批交易照原順序走，每次觸限就買一個新帳戶。"
+                  f"在 ${risk:,.0f} 的單筆風險下是"
+                  f"<b>{plan['accounts']} 個帳戶、{plan['days']} 天</b>，"
+                  f"最後一個通過了。再買這套做法行得通 —— 只是帳戶數和月數"
+                  f"都比「打亂順序」的估計多，因為虧損的那一季是連在一起來的，"
+                  f"不是分散開的。",
+                  f"Walking the same trades in order and buying a fresh account "
+                  f"after every breach. At ${risk:,.0f} a trade that is "
+                  f"<b>{plan['accounts']} accounts over {plan['days']} days</b>, "
+                  f"and the last one passed. Re-buying works &mdash; it is just "
+                  f"more accounts and more months than a shuffled estimate "
+                  f"suggests, because the losing quarter arrives as one run "
+                  f"rather than spread out.") + "</p>",
         cost_table(ctx["costs"]),
-        f'<p>{esc(ctx["path_note"])}</p>',
-        '<p class="muted">One path through one year, not a distribution. It is '
-        'here for the order of magnitude &mdash; hundreds of dollars and several '
-        'months &mdash; not to pick a position size from.</p>',
+        f'<p>{t(esc(ctx["path_note_zh"]), esc(ctx["path_note"]))}</p>',
+        '<p class="muted">' + t(
+            "這是一年裡的一條路徑，不是一個分布。它在這裡是為了給出量級 —— "
+            "幾百美金、幾個月 —— 不是拿來挑倉位大小的。",
+            "One path through one year, not a distribution. It is here for the "
+            "order of magnitude &mdash; hundreds of dollars and several months "
+            "&mdash; not to pick a position size from.") + "</p>",
 
-        "<h2>What this is and is not</h2>",
+        f'<h2>{t("這份東西是什麼、不是什麼", "What this is and is not")}</h2>',
         '<ul class="caveats">',
-        "<li><b>A backtest, not a track record.</b> No order here was ever sent. "
-        "The seven TopstepX endpoints are written from documentation and have "
-        "never run against the live server.</li>",
-        "<li><b>The fill model favours it.</b> A limit order fills when price "
-        "touches it; a real one waits in a queue and sometimes never fills at "
-        "all.</li>",
-        "<li><b>Different data.</b> These are Databento GLBX.MDP3 bars, not "
-        "TopstepX's feed. A sweep qualifies on one tick of penetration, which is "
-        "exactly where two feeds disagree.</li>",
-        f"<li><b>Data ends {esc(ctx['data_end'])}.</b> The last quarter is "
-        "partial.</li>",
-        "<li><b>The consistency target is not modelled here.</b> A single day may not "
-        "exceed 55% of the profit target ($1,650 on a 50K) or the target rises. "
-        "At this risk the biggest day is about one unit of risk, so it has room "
-        "&mdash; but it caps position size near $1,650 a trade.</li>",
-        "<li><b>The eleven-year record is &minus;$3,044</b> across 2,161 trades, "
-        "with 5 losing years and a cumulative curve that never went positive. The "
-        "median three-month window has a profit factor of 0.996 &mdash; a coin "
-        "flip. This window sits in the 98th percentile of those. One good year "
-        "does not settle that; only bars nobody has seen yet can.</li>",
+        *(f"<li>{t(zh, en)}</li>" for zh, en in caveats),
         "</ul>",
 
-        f'<footer>Generated by <code>scripts/quarterly_report.py</code> from '
-        f'<code>data/processed/nq_1m.parquet</code>. Every figure re-derives from '
-        f'<code>backtest/metrics.py</code> and the same simulate path as the '
-        f'backtest &mdash; rerun the script to check any of them.</footer>',
+        '<footer>' + t(
+            "由 <code>scripts/quarterly_report.py</code> 從 "
+            "<code>data/processed/nq_1m.parquet</code> 產生。每一個數字都能從 "
+            "<code>backtest/metrics.py</code> 和回測用的同一條 simulate 路徑"
+            "重新導出 —— 重跑一次就能查證任何一個。",
+            "Generated by <code>scripts/quarterly_report.py</code> from "
+            "<code>data/processed/nq_1m.parquet</code>. Every figure re-derives "
+            "from <code>backtest/metrics.py</code> and the same simulate path as "
+            "the backtest &mdash; rerun the script to check any of them.") + "</footer>",
         "</div>",
+        # The toggle only ever adds a class; with scripting off the page stays
+        # in Chinese rather than going blank.
+        "<script>(function(){var b=document.getElementById('lang'),r="
+        "document.documentElement;b.addEventListener('click',function(){"
+        "var en=r.classList.toggle('lang-en');b.textContent=en?'\u4e2d\u6587':'English';"
+        "});})();</script>",
     ])
 
 
@@ -543,7 +661,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--start", default="2025-10-01", help="inclusive UTC date")
     ap.add_argument("--end", default="2026-10-01", help="exclusive UTC date")
-    ap.add_argument("--risk", type=float, default=1000.0,
+    ap.add_argument("--risk", type=float, default=900.0,
                     help="dollars risked per trade for the headline figures")
     ap.add_argument("--out", default=str(OUT))
     args = ap.parse_args(argv)
@@ -579,6 +697,14 @@ def main(argv=None) -> int:
     cheapest = min(costs, key=lambda n: costs[n]["total"])
     other = next(n for n in costs if n != cheapest)
     gap = costs[other]["total"] - costs[cheapest]["total"]
+    units = costs[cheapest]["months"] + costs[cheapest]["reset_count"]
+    premium = PATHS["No-Activation"]["monthly"] - PATHS["Standard"]["monthly"]
+    path_note_zh = (
+        f"這裡是 {cheapest} 便宜 ${gap:,.0f}。啟用費是「每拿到一個 funded 帳戶"
+        f"收一次」，所以一連串的失敗永遠不會付到它 —— No-Activation 用"
+        f"每個月多 ${premium:,.0f}、而且每次重置也多 ${premium:,.0f}，"
+        f"去買掉一個「贏了之後才會欠」的費用。只有當月數加上付費重置次數"
+        f"少於大約四次時它才划算；這一年需要 {units} 次。")
     path_note = (
         f"{cheapest} is ${gap:,.0f} cheaper here. The activation fee is charged "
         f"once per funded account earned, so a run of failures never pays it \u2014 "
@@ -598,11 +724,20 @@ def main(argv=None) -> int:
                 f"${PROFIT_TARGET:,.0f} target \u2014 it survives by trading too "
                 f"small to pass. Every size that could clear the target breached "
                 f"the limit first.")
+        note_zh = (f"只有 ${best['risk']:,.0f}/單撐過了這一年，而它的報酬是 "
+                   f"{money(best['net'])}，對上 ${PROFIT_TARGET:,.0f} 的目標 —— "
+                   f"它活下來的方式是小到考不過。每一個賺得夠多的倉位，"
+                   f"都是先觸限、不是先達標。")
     else:
-        note = ("No size in this ladder survived the year.")
+        note = "No size in this ladder survived the year."
+        note_zh = "這張表裡沒有任何一個倉位撐過這一年。"
 
     ctx = {
         "title": "LTF Sweep \u2014 four quarters",
+        "title_zh": "LTF Sweep \u2014 四個季度",
+        "subtitle_zh": (f"{first.tz_convert(NY).date()} 至 {last.tz_convert(NY).date()} "
+                        f"\u00b7 {len(trades)} 筆交易，每單風險 ${args.risk:,.0f} "
+                        f"\u00b7 Topstep 50K 規則"),
         "subtitle": (f"{first.tz_convert(NY).date()} to {last.tz_convert(NY).date()} "
                      f"\u00b7 {len(trades)} trades at ${args.risk:,.0f} risk each "
                      f"\u00b7 Topstep 50K rules"),
@@ -611,14 +746,18 @@ def main(argv=None) -> int:
         "quarters": q,
         "ladder": lad,
         "ladder_note": note,
+        "ladder_note_zh": note_zh,
         "rebuy": plan,
         "costs": costs,
         "path_note": path_note,
+        "path_note_zh": path_note_zh,
         "breach_index": breach_i,
         "breach_date": (None if breach_i is None else
                         trades["exit_ts"].iloc[breach_i].tz_convert(NY).date().isoformat()),
         "breach_gap": (None if breach_i is None else
                        f"{(trades['exit_ts'].iloc[breach_i] - first).days} days"),
+        "breach_gap_zh": (None if breach_i is None else
+                          f"{(trades['exit_ts'].iloc[breach_i] - first).days} 天"),
         "below_limit": int((dd <= -LOSS_LIMIT).sum()),
         "data_end": str(bars["ts"].max().tz_convert(NY).date()),
         "equity_svg": line_chart(range(len(pnl)), list(np.cumsum(pnl))),

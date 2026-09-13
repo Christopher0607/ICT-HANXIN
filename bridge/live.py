@@ -425,8 +425,11 @@ def main(argv=None) -> int:
                     help="with --preflight, skip the checks that need the broker")
     ap.add_argument("--journal", default=str(DEFAULT_PATH),
                     help="where to append the decision journal")
-    ap.add_argument("--risk", type=float, default=1000.0,
-                    help="dollars risked per trade (50K Combine at 2%% is 1000)")
+    ap.add_argument("--risk", type=float, default=900.0,
+                    help="dollars risked per trade. 2%% of a 50K is 1000, but "
+                         "commissions push a full stop past that -- the worst day "
+                         "measured at 1000 was -1,060 against a 1,000 daily loss "
+                         "limit, and 900 tops out at -963")
     args = ap.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO,
