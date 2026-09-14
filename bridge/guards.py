@@ -93,6 +93,22 @@ def block_reason(state: AccountState, planned_risk: float, cfg: Config) -> int:
     return OK
 
 
+#: Express Funded scaling plan: (balance below which this ceiling applies,
+#: micros). Above the last threshold the ceiling is SCALING_TOP. Kept as data
+#: rather than a chain of conditionals because backtest/recycle.py models the
+#: same plan and two copies of a ladder drift the first time one is edited.
+SCALING_TIERS: tuple[tuple[float, int], ...] = ((1500.0, 20), (2000.0, 30))
+SCALING_TOP = 50
+
+
+def scaling_tier(realized: float) -> int:
+    """Micros the Express Funded scaling plan allows at this realised balance."""
+    for threshold, cap in SCALING_TIERS:
+        if realized < threshold:
+            return cap
+    return SCALING_TOP
+
+
 def scaling_cap(realized: float, cfg: Config) -> int:
     """Contract ceiling, following the Express Funded scaling plan when on.
 
@@ -103,7 +119,7 @@ def scaling_cap(realized: float, cfg: Config) -> int:
     """
     if not cfg.scaling_plan:
         return cfg.max_contracts
-    return 20 if realized < 1500 else (30 if realized < 2000 else 50)
+    return scaling_tier(realized)
 
 
 def clamp_size(qty: int, cfg: Config, realized: float = 0.0) -> int:

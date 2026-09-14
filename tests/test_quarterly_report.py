@@ -6,8 +6,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts
 
 import pandas as pd
 import pytest
-from quarterly_report import (PATHS, PROFIT_TARGET, LOSS_LIMIT, STYLE,
-                              path_cost, rebuy)
+from quarterly_report import PATHS, PROFIT_TARGET, LOSS_LIMIT, path_cost, rebuy
+from reportkit import STYLE
 
 
 def seq(pnls):
