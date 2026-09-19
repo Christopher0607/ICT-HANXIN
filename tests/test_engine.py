@@ -231,3 +231,129 @@ def test_the_old_behaviour_is_still_reachable_for_comparison():
                  BacktestConfig(skip_marketable_entries=False))
     assert bool(t.filled[0])
     assert t.entry_fill[0] == 100.0
+
+
+# --- stop entries ------------------------------------------------------------
+# A breakout model buys above the market. The level is reached by price going
+# UP through it, not by price coming back down to it, and getting that backwards
+# fills trades on days the market never offered one.
+
+STOP_CFG = BacktestConfig(entry_side="stop")
+
+
+def test_a_buy_stop_fills_only_when_price_trades_up_through_it():
+    # Price opens below 102 and climbs through it on bar 2.
+    t = simulate(_order(entry_price=102.0, stop_price=98.0), RISING, STOP_CFG)
+    assert bool(t.filled[0])
+    assert t.entry_ts[0] == TS[2]
+
+    # The same level read as a limit is not a trade at all: the market opened
+    # below it, so it is marketable rather than resting. One price, one set of
+    # bars, and the two readings do not even agree that a trade exists.
+    as_limit = simulate(_order(entry_price=102.0, stop_price=98.0), RISING)
+    assert not bool(as_limit.filled[0])
+    assert as_limit.exit_reason[0] == "premise_failed"
+
+
+def test_a_buy_stop_that_gaps_pays_the_open_not_the_trigger():
+    """A triggered market order cannot be filled better than the first price
+    after it triggers, and pretending otherwise hands the model a price the
+    market never showed."""
+    gapped = _bars([(100, 100.5, 99.5, 100), (106, 108, 105.5, 107),
+                    (107, 112, 106, 111)])
+    t = simulate(_order(entry_price=102.0, stop_price=98.0, target_price=111.0),
+                 gapped, STOP_CFG)
+    assert t.entry_fill[0] == 106.0     # the open, not the 102 trigger
+
+
+def test_a_sell_stop_mirrors_the_buy_case():
+    falling = _bars([(100, 100.5, 99.5, 100), (99, 99.5, 96, 97),
+                     (97, 97.5, 92, 93)])
+    t = simulate(_order(direction=-1, entry_price=98.0, stop_price=102.0,
+                        target_price=93.0), falling, STOP_CFG)
+    assert bool(t.filled[0])
+    assert t.entry_ts[0] == TS[1]
+
+
+def test_the_marketable_guard_does_not_apply_to_stop_entries():
+    """That guard exists because a limit the market has passed is no longer a
+    limit. A stop below the market is just a breakout that already happened."""
+    t = simulate(_order(entry_price=100.5, stop_price=96.0), RISING, STOP_CFG)
+    assert bool(t.filled[0])
+    assert t.exit_reason[0] != "premise_failed"
+
+
+def test_rejects_an_invalid_entry_side():
+    with pytest.raises(ValueError, match="entry_side"):
+        BacktestConfig(entry_side="market")
+
+
+# --- scaling out -------------------------------------------------------------
+# Half off at the first target, the rest to a further one with its stop moved
+# up. The headline win rate of such a model is the FIRST target's hit rate, so
+# that has to survive as its own column.
+
+SCALED = BacktestConfig(scale_out_fraction=0.5, runner_stop_offset=2.0)
+
+
+def _runner_order(**kw):
+    o = _order(**kw)
+    o["runner_target"] = kw.pop("runner_target", 115.0)
+    return o
+
+
+# Fill at 100 on bar 0; bar 1 reaches the 105 first target without dipping to
+# the runner's 102 stop; bar 2 reaches the 115 runner target.
+TWO_LEG = _bars([(101, 101.5, 99.5, 100), (103, 106, 103, 105),
+                 (106, 116, 105, 115)])
+
+
+def test_scaling_out_blends_the_two_legs():
+    t = simulate(_runner_order(target_price=105.0), TWO_LEG, SCALED)
+    assert bool(t.tp1_hit[0]) and bool(t.scaled_out[0])
+    # 50 contracts at $500 over a 5-point stop; 25 out at +5, 25 out at +15.
+    assert t.contracts[0] == 50
+    assert t.runner_points[0] == pytest.approx(15.0)
+    assert t.points[0] == pytest.approx(10.0)
+    assert t.exit_reason[0] == "target"
+
+
+def test_a_stopped_trade_never_reaches_the_second_leg():
+    stopped = _bars([(101, 101.5, 99.5, 100), (99, 99.5, 94, 96)])
+    t = simulate(_runner_order(target_price=105.0), stopped, SCALED)
+    assert not bool(t.tp1_hit[0])
+    assert not bool(t.scaled_out[0])
+    assert t.exit_reason[0] == "stop"
+
+
+def test_the_runner_stop_sits_where_the_config_puts_it():
+    pulled_back = _bars([(101, 101.5, 99.5, 100), (103, 106, 103, 105),
+                         (104, 104.5, 101, 102)])
+    t = simulate(_runner_order(target_price=105.0), pulled_back, SCALED)
+    assert bool(t.scaled_out[0])
+    # Stop moved to entry + 2, and a stop is a market order that slips a tick.
+    assert t.runner_points[0] == pytest.approx(2.0 - TICK_SIZE)
+    assert t.points[0] == pytest.approx((5.0 + 2.0 - TICK_SIZE) / 2)
+
+
+def test_one_contract_cannot_be_halved_and_exits_whole():
+    cfg = BacktestConfig(scale_out_fraction=0.5, runner_stop_offset=2.0,
+                         sizing="fixed_contracts", contracts=1)
+    t = simulate(_runner_order(target_price=105.0), TWO_LEG, cfg)
+    assert bool(t.tp1_hit[0])
+    assert not bool(t.scaled_out[0])      # flagged, not averaged away
+    assert t.points[0] == pytest.approx(5.0)
+
+
+def test_the_second_leg_is_off_unless_asked_for():
+    """The whole point of the default: eight strategies already depend on this
+    engine, and none of them should move because a ninth needed two legs."""
+    plain = simulate(_order(target_price=105.0), TWO_LEG)
+    with_column = simulate(_runner_order(target_price=105.0), TWO_LEG)
+    assert plain.points[0] == with_column.points[0] == pytest.approx(5.0)
+    assert not bool(with_column.scaled_out[0])
+
+
+def test_rejects_an_invalid_scale_out_fraction():
+    with pytest.raises(ValueError, match="scale_out_fraction"):
+        BacktestConfig(scale_out_fraction=1.0)

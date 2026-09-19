@@ -78,6 +78,20 @@ class BacktestConfig:
     #: single largest execution risk, so it is worth running both.
     entry_fill_mode: str = "touch"
 
+    #: Which way price has to move to fill the entry.
+    #:
+    #: Every strategy here until now entered on a retracement, so a long fills
+    #: when price falls to the level -- a limit. A breakout model does the
+    #: opposite: it buys above the market and fills when price rises through
+    #: the level, which is a stop. The two are not interchangeable. Filling a
+    #: stop order with the limit rule would have it fill on days price never
+    #: went there, and every one of those is a trade that did not happen.
+    #:
+    #: A stop entry that gaps is filled at the bar's open rather than at the
+    #: trigger, because a market order cannot be filled better than the first
+    #: price available after it triggers.
+    entry_side: str = "limit"
+
     #: Refuse a resting limit the market has already passed.
     #:
     #: A sell limit below the market is not a limit order -- it is marketable,
@@ -104,6 +118,21 @@ class BacktestConfig:
     #: touch really does trigger it.
     exit_fill_mode: str = "touch"
 
+    #: Take this share of the position off at ``target_price`` and let the rest
+    #: run to ``runner_target`` with its stop moved to
+    #: ``entry + runner_stop_offset``. Zero -- the default -- is the single
+    #: exit every existing strategy uses, and leaves their results untouched.
+    #:
+    #: Contracts are whole, so the first leg is rounded DOWN and the runner
+    #: keeps the remainder. A one-contract position cannot be halved, and comes
+    #: off in one piece at the first target instead; ``scaled_out`` in the
+    #: results says which trades that happened to rather than hiding it inside
+    #: an average.
+    scale_out_fraction: float = 0.0
+    #: Points from the entry, in the trade's direction, where the runner's stop
+    #: sits once the first target is hit.
+    runner_stop_offset: float = 0.0
+
     sizing: str = "fixed_risk"
     risk_per_trade_usd: float = 500.0
     contracts: int = 1
@@ -118,6 +147,10 @@ class BacktestConfig:
             raise ValueError("entry_fill_mode must be 'touch' or 'through'")
         if self.exit_fill_mode not in ("touch", "through"):
             raise ValueError("exit_fill_mode must be 'touch' or 'through'")
+        if self.entry_side not in ("limit", "stop"):
+            raise ValueError("entry_side must be 'limit' or 'stop'")
+        if not 0.0 <= self.scale_out_fraction < 1.0:
+            raise ValueError("scale_out_fraction must be in [0, 1)")
 
     def size_for(self, risk_points: float) -> int:
         """Contracts to trade given the stop distance, or 0 to skip the trade.
@@ -175,6 +208,9 @@ def simulate(orders: pd.DataFrame, bars: pd.DataFrame, config: BacktestConfig | 
     slip_in = config.entry_slippage_ticks * TICK_SIZE
     slip_out = config.exit_slippage_ticks * TICK_SIZE
 
+    # An optional column: strategies without a second leg never carry it.
+    has_runner = "runner_target" in orders.columns
+
     results = []
     for _, order in orders.iterrows():
         direction = int(order["direction"])
@@ -187,13 +223,21 @@ def simulate(orders: pd.DataFrame, bars: pd.DataFrame, config: BacktestConfig | 
         final = int(ts.searchsorted(order["time_exit_ts"], side="right"))
         expiry, final = min(expiry, len(ts)), min(final, len(ts))
 
+        runner_target = (float(order["runner_target"])
+                         if has_runner and pd.notna(order["runner_target"])
+                         else None)
+
         size = config.size_for(abs(entry - stop))
         if size <= 0:
             # Stop too wide to fit the risk budget at even one contract.
             results.append(_unfilled(order, reason="oversized"))
             continue
 
-        if config.skip_marketable_entries and start < expiry:
+        # Only a limit can be marketable in the sense this guard means. A stop
+        # sitting below the market is simply a breakout that already happened,
+        # and the fill price below handles it by paying the open.
+        if (config.skip_marketable_entries and config.entry_side == "limit"
+                and start < expiry):
             opened = open_[start]
             marketable = (opened < entry) if direction > 0 else (opened > entry)
             if marketable:
@@ -203,20 +247,55 @@ def simulate(orders: pd.DataFrame, bars: pd.DataFrame, config: BacktestConfig | 
                 continue
 
         fill_index = _find_fill(low, high, start, expiry, entry, direction,
-                                config.entry_fill_mode)
+                                config.entry_fill_mode, config.entry_side)
         if fill_index is None:
             results.append(_unfilled(order))
             continue
 
         entry_price = entry + direction * slip_in
-        exit_index, exit_price, reason = _resolve_exit(
-            open_, high, low, close, fill_index, final,
-            direction, stop, target, slip_out, pessimistic,
-            TICK_SIZE if config.exit_fill_mode == "through" else 0.0,
-        )
-        ambiguous = _bar_contains_both(high, low, fill_index, exit_index, stop, target)
+        if config.entry_side == "stop":
+            # A triggered market order cannot be filled better than the first
+            # price after it triggers. When the bar opens beyond the trigger,
+            # that price is the open, not the level.
+            opened = open_[fill_index]
+            entry_price = (max(entry_price, opened) if direction > 0
+                           else min(entry_price, opened))
+        target_edge = TICK_SIZE if config.exit_fill_mode == "through" else 0.0
+        # Whole contracts: half of one is nothing, so a one-lot position cannot
+        # be scaled and comes off in one piece at the first target.
+        first_size = (int(size * config.scale_out_fraction)
+                      if config.scale_out_fraction > 0 and runner_target is not None
+                      else 0)
 
-        points = (exit_price - entry_price) * direction
+        runner = None
+        if first_size > 0:
+            runner_stop = entry_price + direction * config.runner_stop_offset
+            (first_index, first_price, first_reason), runner = _resolve_scaled(
+                open_, high, low, close, fill_index, final, direction,
+                stop, target, runner_stop, runner_target, slip_out,
+                pessimistic, target_edge)
+        else:
+            first_index, first_price, first_reason = _resolve_exit(
+                open_, high, low, close, fill_index, final,
+                direction, stop, target, slip_out, pessimistic, target_edge)
+
+        ambiguous = _bar_contains_both(high, low, fill_index, first_index, stop, target)
+        first_points = (first_price - entry_price) * direction
+
+        if runner is not None:
+            exit_index, runner_price, runner_reason = runner
+            runner_size = size - first_size
+            runner_points = (runner_price - entry_price) * direction
+            # Weighted so that points * size is still the total points won, and
+            # every figure downstream keeps meaning what it meant.
+            points = (first_points * first_size
+                      + runner_points * runner_size) / size
+            exit_price, reason = runner_price, runner_reason
+        else:
+            exit_index, exit_price, reason = first_index, first_price, first_reason
+            runner_points, runner_reason = float("nan"), None
+            points = first_points
+
         risk = abs(entry_price - stop)
         gross = points / TICK_SIZE * config.tick_value * size
         commission = config.commission_per_round_turn * size
@@ -235,6 +314,13 @@ def simulate(orders: pd.DataFrame, bars: pd.DataFrame, config: BacktestConfig | 
             "bars_held": exit_index - fill_index,
             "ambiguous": ambiguous,
             "contracts": size,
+            # The claimed win rate for a scale-out model is the first target's
+            # hit rate, so it has to be visible on its own rather than blended
+            # into an average that no strategy description ever quotes.
+            "tp1_hit": first_reason.startswith("target"),
+            "scaled_out": runner is not None,
+            "runner_points": runner_points,
+            "runner_exit_reason": runner_reason,
         })
 
     # Strategies already carry their own risk_points; keep theirs and drop the
@@ -251,6 +337,7 @@ _RESULT_COLUMNS = [
     "filled", "entry_ts", "entry_fill", "exit_ts", "exit_price", "exit_reason",
     "points", "risk_points", "r_multiple", "gross_pnl", "net_pnl",
     "bars_held", "ambiguous", "contracts",
+    "tp1_hit", "scaled_out", "runner_points", "runner_exit_reason",
 ]
 
 
@@ -260,15 +347,26 @@ def _unfilled(order: pd.Series, reason: str = "expired") -> dict:
         "exit_ts": pd.NaT, "exit_price": np.nan, "exit_reason": reason,
         "points": np.nan, "risk_points": np.nan, "r_multiple": np.nan,
         "gross_pnl": 0.0, "net_pnl": 0.0, "bars_held": 0, "ambiguous": False,
-        "contracts": 0,
+        "contracts": 0, "tp1_hit": False, "scaled_out": False,
+        "runner_points": np.nan, "runner_exit_reason": None,
     }
 
 
-def _find_fill(low, high, start, expiry, entry, direction, mode="touch") -> int | None:
-    """First bar at which the resting limit order is deemed filled."""
+def _find_fill(low, high, start, expiry, entry, direction, mode="touch",
+               side="limit") -> int | None:
+    """First bar at which the resting order is deemed filled.
+
+    A limit is reached by price coming back to it; a stop is reached by price
+    going through it. Which one applies is the difference between a
+    retracement model and a breakout model, and using the wrong one fills
+    trades on days the market never offered them.
+    """
     edge = 0.0 if mode == "touch" else TICK_SIZE
     for i in range(start, expiry):
-        reached = (low[i] <= entry - edge) if direction > 0 else (high[i] >= entry + edge)
+        if side == "limit":
+            reached = (low[i] <= entry - edge) if direction > 0 else (high[i] >= entry + edge)
+        else:
+            reached = (high[i] >= entry + edge) if direction > 0 else (low[i] <= entry - edge)
         if reached:
             return i
     return None
@@ -302,6 +400,32 @@ def _resolve_exit(open_, high, low, close, fill_index, final,
     # of the last bar in the window, with the same slippage a market order pays.
     last = max(fill_index, final - 1)
     return last, float(close[last]) - direction * slip_out, "time_exit"
+
+
+def _resolve_scaled(open_, high, low, close, fill_index, final, direction,
+                    stop, target, runner_stop, runner_target, slip_out,
+                    pessimistic, target_edge=0.0):
+    """Two legs: part off at ``target``, the rest to ``runner_target``.
+
+    The first leg is resolved exactly as a single exit would be. Only if it
+    reaches the target does a second leg exist, and it starts on that same bar
+    -- price is already there, so the runner's stop can be hit before the bar
+    closes and pretending otherwise would give the runner a free bar.
+
+    Returns ``(first_leg, runner)``, each ``(index, price, reason)``, with
+    ``runner`` None when the position came off in one piece.
+    """
+    first = _resolve_exit(open_, high, low, close, fill_index, final,
+                          direction, stop, target, slip_out, pessimistic,
+                          target_edge)
+    if not first[2].startswith("target"):
+        return first, None
+
+    tp1_index = first[0]
+    runner = _resolve_exit(open_, high, low, close, tp1_index, final,
+                           direction, runner_stop, runner_target, slip_out,
+                           pessimistic, target_edge)
+    return first, runner
 
 
 def _bar_contains_both(high, low, fill_index, exit_index, stop, target) -> bool:
