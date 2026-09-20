@@ -166,3 +166,46 @@ def test_costs_are_hand_checkable():
     assert c["free_credits"] == 2                # one per rebill after the first
     assert c["reset_count"] == 3                 # 5 resets less 2 credits
     assert c["total"] == pytest.approx(3 * 49.0 + 3 * 49.0 + 3 * 14.5 + 2 * 149.0)
+
+
+def test_the_timeline_says_which_trade_caused_each_event():
+    """Accounts do not outlive the loop, so how long one lived is recoverable
+    only from the trade index on the event that ended it."""
+    out = recycle(seq([1000.0] * 3 + [600.0] * 5))
+    events = [(e["event"], e["trade"]) for e in out["timeline"]]
+    assert events == [("passed", 2), ("payout", 7)]
+
+
+def test_which_pricing_path_wins_turns_on_a_ratio_not_a_count():
+    """The threshold is (months + paid resets) per funded account EARNED.
+
+    Written as a bare count it is only right when exactly one account is
+    earned, and a plan built on recycling earns many -- which is how
+    docs/GO_LIVE.md came to recommend the more expensive path for the case it
+    was actually describing.
+    """
+    noaf = XFARules(monthly=85.0, reset=85.0, activation=0.0)
+    # 36 x (M + P) < 149 x A is the break-even, so the ratio is 149/36 = 4.14.
+    days, resets = 365.0, 5
+
+    def cheaper(activations):
+        a = costs(RULES, days, resets, activations)["total"]
+        b = costs(noaf, days, resets, activations)["total"]
+        return "standard" if a < b else "no-activation"
+
+    months = costs(RULES, days, resets, 1)["months"]
+    paid = costs(RULES, days, resets, 1)["reset_count"]
+    units = months + paid
+    # One funded account: the ratio is the whole count, far above 4.14.
+    assert units / 1 > 4.14 and cheaper(1) == "standard"
+    # Enough funded accounts to bring the ratio under it, and it flips.
+    enough = int(units / 4.14) + 1
+    assert units / enough < 4.14 and cheaper(enough) == "no-activation"
+
+
+def test_activation_is_the_only_line_that_scales_with_funded_accounts():
+    base = costs(RULES, 365.0, 5, 1)
+    more = costs(RULES, 365.0, 5, 4)
+    assert more["activation"] == 4 * RULES.activation
+    for line in ("subscription", "paid_resets", "api_access"):
+        assert more[line] == base[line]

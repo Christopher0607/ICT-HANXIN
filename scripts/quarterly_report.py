@@ -48,7 +48,11 @@ LOSS_LIMIT = 2000.0
 #: the activation fee lands -- Standard charges it "once per XFA earned", so a
 #: run of failures never pays it. No-Activation buys that away with +$36 a month
 #: AND +$36 on every reset, which is the wrong trade for a plan built on
-#: re-buying: it wins only while (months + paid resets) stays under about four.
+#: re-buying: it wins only while (months + paid resets) PER FUNDED ACCOUNT
+#: EARNED stays under about four. The denominator matters -- this replay stops
+#: at the first pass, so it earns one, and quoting the threshold as a bare count
+#: is only right in that case. A plan that keeps recycling earns many and the
+#: ratio falls below the threshold; docs/GO_LIVE.md works that through.
 PATHS = {
     "Standard":       {"monthly": 49.0, "reset": 49.0, "activation": 149.0},
     "No-Activation":  {"monthly": 85.0, "reset": 85.0, "activation": 0.0},
@@ -501,16 +505,24 @@ def main(argv=None) -> int:
         f"這裡是 {cheapest} 便宜 ${gap:,.0f}。啟用費是「每拿到一個 funded 帳戶"
         f"收一次」，所以一連串的失敗永遠不會付到它 —— No-Activation 用"
         f"每個月多 ${premium:,.0f}、而且每次重置也多 ${premium:,.0f}，"
-        f"去買掉一個「贏了之後才會欠」的費用。只有當月數加上付費重置次數"
-        f"少於大約四次時它才划算；這一年需要 {units} 次。")
+        f"去買掉一個「贏了之後才會欠」的費用。門檻是"
+        f"**（月數＋付費重置）÷ 拿到的 funded 帳戶數 < 4.14** —— "
+        f"這個重播在第一次通過就停，所以分母是 1，比值就是 {units}。"
+        f"**一直回收下去分母會變大，答案會翻過來**：整年不停的話是 6 個 "
+        f"funded 帳戶、比值 2.5，換成 No-Activation 比較便宜。"
+        f"詳見 docs/GO_LIVE.md。")
     path_note = (
         f"{cheapest} is ${gap:,.0f} cheaper here. The activation fee is charged "
         f"once per funded account earned, so a run of failures never pays it \u2014 "
         f"No-Activation spends ${PATHS['No-Activation']['monthly'] - PATHS['Standard']['monthly']:,.0f} "
         f"more every month AND on every reset to buy away a fee you only owe "
-        f"after you have already won. It comes out ahead only while months plus "
-        f"paid resets stay under about four; this year needed "
-        f"{costs[cheapest]['months'] + costs[cheapest]['reset_count']}."
+        f"after you have already won. The threshold is <b>(months + paid "
+        f"resets) divided by funded accounts EARNED, under 4.14</b>. This "
+        f"replay stops at the first pass, so the denominator is one and the "
+        f"ratio is {units}. <b>Keep recycling and the denominator grows until "
+        f"the answer flips</b>: a full year of it earns six funded accounts at "
+        f"a ratio of 2.5, where No-Activation is the cheaper path. "
+        f"docs/GO_LIVE.md works it through."
     )
 
     lad = ladder(bars, args.start, args.end)

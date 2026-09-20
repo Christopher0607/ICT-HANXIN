@@ -183,15 +183,20 @@ def recycle(trades: pd.DataFrame, rules: XFARules = XFARules(),
             f"{per_day} trades on one day: the end-of-day loss limit cannot be "
             "walked trade by trade")
 
-    def mark(ts, event):
+    def mark(ts, event, at):
         """Record where the money stands, not just that something happened.
 
         A total says the run made money; this says when. The two are different
         questions and only the second one is survivable or not.
+
+        ``at`` is the index of the trade that caused the event, which is what
+        lets a caller reconstruct how many trades each account lived for --
+        recoverable from nothing else, since accounts are not objects that
+        outlive the loop.
         """
         spent = costs(rules, (ts - first).total_seconds() / 86400,
                       resets, activations)["total"]
-        timeline.append({"ts": ts, "event": event, "cash": cash,
+        timeline.append({"ts": ts, "event": event, "trade": at, "cash": cash,
                          "cost": spent, "net": cash - spent})
 
     account, funded = _Account(), False
@@ -204,8 +209,8 @@ def recycle(trades: pd.DataFrame, rules: XFARules = XFARules(),
     funded_since = None
     timeline: list[dict] = []
 
-    for pnl, contracts, exit_ts in zip(trades["net_pnl"], trades["contracts"],
-                                       trades["exit_ts"]):
+    for at, (pnl, contracts, exit_ts) in enumerate(
+            zip(trades["net_pnl"], trades["contracts"], trades["exit_ts"])):
         # The backtest sizes on risk alone; neither ceiling exists there.
         cap = (scaling_tier(account.balance) if funded
                else rules.combine_max_contracts)
@@ -219,7 +224,7 @@ def recycle(trades: pd.DataFrame, rules: XFARules = XFARules(),
             if account.balance >= rules.profit_target:
                 activations += 1
                 funded, account, funded_since = True, _Account(), exit_ts
-                mark(exit_ts, "passed")
+                mark(exit_ts, "passed", at)
                 continue
             if account.balance <= account.floor(rules.loss_limit, None):
                 combine_busts += 1
@@ -227,7 +232,7 @@ def recycle(trades: pd.DataFrame, rules: XFARules = XFARules(),
                 bust_streak += 1
                 worst_streak = max(worst_streak, bust_streak)
                 account = _Account()
-                mark(exit_ts, "combine_bust")
+                mark(exit_ts, "combine_bust", at)
             continue
 
         # --- funded ---
@@ -244,7 +249,7 @@ def recycle(trades: pd.DataFrame, rules: XFARules = XFARules(),
             bust_streak += 1
             worst_streak = max(worst_streak, bust_streak)
             funded, account, funded_since = False, _Account(), None
-            mark(exit_ts, "funded_bust")
+            mark(exit_ts, "funded_bust", at)
             continue
 
         locked = account.peak >= rules.mll_locks_at
@@ -264,7 +269,7 @@ def recycle(trades: pd.DataFrame, rules: XFARules = XFARules(),
             worst_dry = max(worst_dry,
                             (exit_ts - last_cash_ts).total_seconds() / 86400)
             last_cash_ts = exit_ts
-            mark(exit_ts, "payout")
+            mark(exit_ts, "payout", at)
 
     end = trades["exit_ts"].iloc[-1]
     if funded and funded_since is not None:
