@@ -107,3 +107,26 @@ def test_print_css_keeps_figures_whole_and_in_colour():
     kept = next(line for line in block.splitlines() if "break-inside:avoid" in line)
     for selector in ("svg", "table", ".card", ".tile"):
         assert selector in kept, f"{selector} may be split across a page"
+
+
+def test_the_divider_is_absent_unless_asked_for():
+    """Nine reports' worth of charts predate it; none should grow a line."""
+    from reportkit import line_chart
+    assert 'class="divider"' not in line_chart(range(5), [1, 2, 3, 2, 4])
+
+
+def test_the_divider_is_drawn_and_labelled_where_asked():
+    from reportkit import line_chart
+    svg = line_chart(range(10), list(range(10)),
+                     divider=(6, ("樣本外", "out of sample")))
+    assert 'class="divider"' in svg
+    assert "out of sample" in svg and "樣本外" in svg
+
+
+def test_the_divider_label_can_be_left_off():
+    """A chart already carrying a limit label has no room for a second one in
+    the same corner, and the shorter label is the one that loses."""
+    from reportkit import line_chart
+    svg = line_chart(range(10), list(range(10)), limit=2000.0, divider=(6, None))
+    assert 'class="divider"' in svg
+    assert "divider-label" not in svg

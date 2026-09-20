@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import argparse
 import glob
+import html as html_mod
+import re
 import os
 import pathlib
 import shutil
@@ -58,6 +60,17 @@ def find_chromium() -> str | None:
         if which:
             return which
     return None
+
+
+def page_title(html: pathlib.Path) -> str:
+    """The page's own <title>, for the running footer.
+
+    Hard-coding one report's name put "LTF Sweep" at the foot of every other
+    report this script printed.
+    """
+    head = html.read_text(encoding="utf-8", errors="replace")[:8192]
+    found = re.search(r"<title>(.*?)</title>", head, re.S | re.I)
+    return html_mod.unescape(found[1]).strip() if found else html.stem
 
 
 def render(html: pathlib.Path, out: pathlib.Path, lang: str,
@@ -103,7 +116,7 @@ def render(html: pathlib.Path, out: pathlib.Path, lang: str,
                 footer_template=(
                     '<div style="width:100%;font-size:8px;color:#63625b;'
                     'padding:0 12mm;display:flex;justify-content:space-between">'
-                    '<span>LTF Sweep</span>'
+                    f'<span>{html_mod.escape(page_title(html))}</span>'
                     '<span class="pageNumber"></span></div>'),
             )
         finally:

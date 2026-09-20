@@ -44,20 +44,28 @@ def t(zh: str, en: str) -> str:
     return f'<span class="zh">{zh}</span><span class="en">{en}</span>'
 
 
-def svg_t(zh: str, en: str, **attrs) -> str:
+def svg_t(zh: str, en: str, class_: str = "tick", **attrs) -> str:
     """The same, for SVG. Chart labels are text too: a half-translated chart is
     the first thing anyone notices after switching language."""
     a = " ".join(f'{k.replace("_", "-")}="{v}"' for k, v in attrs.items())
-    return (f'<text class="tick zh" {a}>{esc(zh)}</text>'
-            f'<text class="tick en" {a}>{esc(en)}</text>')
+    return (f'<text class="{class_} zh" {a}>{esc(zh)}</text>'
+            f'<text class="{class_} en" {a}>{esc(en)}</text>')
 
 
 def line_chart(xs, ys, *, width=380, height=155, limit=None, fill=False,
-               ends=None) -> str:
+               ends=None, divider=None) -> str:
     """One series over trade number. Optional threshold line and fill to zero.
 
     ``ends`` names the two x-axis labels as ((zh, en), (zh, en)); the default
     counts trades, which is wrong for a series measured in anything else.
+
+    ``divider`` is ``(index, (zh, en))`` and draws a labelled vertical line at
+    that point; pass ``(index, None)`` for the line alone, which is what a
+    chart already carrying a ``limit`` label needs -- both labels want the same
+    corner and the shorter one loses. It exists for one job: marking where a curve stops being the
+    data a rule was chosen on and starts being a test of it. Whether the two
+    sides of that line look alike is the whole question, and a curve without
+    it invites the reader to judge the shape as a single run.
     """
     pad_l, pad_r, pad_t, pad_b = 56, 10, 20, 20
     inner_w, inner_h = width - pad_l - pad_r, height - pad_t - pad_b
@@ -91,6 +99,17 @@ def line_chart(xs, ys, *, width=380, height=155, limit=None, fill=False,
             f'text-anchor="end">虧損上限 &minus;${limit:,.0f}</text>'
             f'<text class="limit-label en" x="{width - pad_r}" y="13.5" '
             f'text-anchor="end">loss limit &minus;${limit:,.0f}</text>')
+    if divider is not None:
+        at, labels = divider
+        x = px(at)
+        parts.append(f'<line class="divider" x1="{x:.1f}" y1="{pad_t}" '
+                     f'x2="{x:.1f}" y2="{height - pad_b}"/>')
+        if labels is not None:
+            # Anchored away from the shorter side so the label never runs off.
+            anchor = "start" if at < len(xs) / 2 else "end"
+            nudge = 4 if anchor == "start" else -4
+            parts.append(svg_t(*labels, x=f"{x + nudge:.1f}", y=pad_t - 6,
+                               text_anchor=anchor, class_="divider-label"))
     parts.append(f'<polyline class="series" points="{points}"/>')
 
     for value in (hi, lo):
@@ -194,6 +213,8 @@ svg{width:100%;max-width:560px;height:auto;display:block;margin-inline:auto}
 .area{fill:var(--neg);opacity:.16}
 .limit{stroke:var(--crit);stroke-width:2;stroke-dasharray:5 4}
 .limit-label{fill:var(--crit);font-size:10.5px;font-weight:700}
+.divider{stroke:var(--ink-3);stroke-width:1.5;stroke-dasharray:3 3;opacity:.7}
+.divider-label{fill:var(--ink-3);font-size:10px;font-weight:600}
 .tick{fill:var(--ink-3);font-size:11px}
 .bar-value{fill:var(--ink-2);font-size:11px;font-weight:600}
 .bar.pos{fill:var(--pos)}.bar.neg{fill:var(--neg)}
