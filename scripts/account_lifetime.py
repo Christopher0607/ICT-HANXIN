@@ -61,7 +61,9 @@ def lives(trades: pd.DataFrame, timeline: list[dict]) -> pd.DataFrame:
         rows.append({
             "kind": "funded" if funded else "combine",
             "outcome": {"passed": "passed", "combine_bust": "busted",
-                        "funded_bust": "busted"}[kind],
+                        "funded_bust": "busted",
+                        # Stopped by the guard: not a breach and not a pass.
+                        "retired": "retired"}[kind],
             "trades": at - start + 1,
             "days": (exits[at] - exits[start]).days,
             "payouts": payouts if funded else 0,

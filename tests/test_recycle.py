@@ -209,3 +209,54 @@ def test_activation_is_the_only_line_that_scales_with_funded_accounts():
     assert more["activation"] == 4 * RULES.activation
     for line in ("subscription", "paid_resets", "api_access"):
         assert more[line] == base[line]
+
+
+# --- the guard ---------------------------------------------------------------
+# bridge/guards.py blocks a trade when the room left is under safety_mult times
+# the risk about to be taken. docs/GO_LIVE.md runs it off on an evaluation and
+# on once funded, so the model has to be able to express both.
+
+def test_the_guard_is_off_unless_asked_for():
+    """Every figure this project has published assumes no guard."""
+    plain = recycle(seq([-1900.0, 1000.0, 1000.0, 1000.0, 1000.0]))
+    assert plain["retired_combine"] == 0 and plain["retired_funded"] == 0
+
+
+def test_a_guard_needs_to_know_the_risk_it_is_protecting_against():
+    with pytest.raises(ValueError, match="risk_usd"):
+        recycle(seq([100.0] * 5), rules=XFARules(combine_guard=True))
+
+
+def test_the_guard_stops_short_of_the_breach():
+    """Room left is 2000 - 1900 = 100, and the next $900 trade needs 1350 of
+    it, so the account is retired instead of taking the trade that would have
+    ended it."""
+    rules = XFARules(combine_guard=True)
+    out = recycle(seq([-1900.0, -1000.0]), rules=rules, risk_usd=900.0)
+    assert out["retired_combine"] == 1
+    assert out["combine_busts"] == 0          # it never breached
+    assert [e["event"] for e in out["timeline"]] == ["retired"]
+
+
+def test_the_same_sequence_breaches_with_the_guard_off():
+    out = recycle(seq([-1900.0, -1000.0]))
+    assert out["combine_busts"] == 1 and out["retired_combine"] == 0
+
+
+def test_a_retired_account_still_costs_a_reset():
+    """Stopping is not free: it neither passes nor busts, and the replacement
+    is bought either way."""
+    rules = XFARules(combine_guard=True)
+    out = recycle(seq([-1900.0, -1000.0]), rules=rules, risk_usd=900.0)
+    assert out["accounts_bought"] == 2
+
+
+def test_the_guard_can_be_on_for_one_phase_only():
+    """The two-stage plan: off while the evaluation is cheap to replace, on
+    once it is not."""
+    rules = XFARules(funded_guard=True)
+    # Passes on trade 3, then the funded account drifts down toward its floor.
+    out = recycle(seq([1000.0] * 3 + [500.0, -1400.0, -100.0]),
+                  rules=rules, risk_usd=900.0)
+    assert out["retired_combine"] == 0        # the evaluation ran unguarded
+    assert out["retired_funded"] == 1

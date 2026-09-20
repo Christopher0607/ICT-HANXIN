@@ -100,6 +100,19 @@ class XFARules:
     #: not be.
     profit_split: float = 0.90
 
+    #: Stop trading rather than breach -- the live guard in bridge/guards.py,
+    #: which blocks a trade when the room left is under ``safety_mult`` times
+    #: the risk about to be taken. docs/GO_LIVE.md runs it OFF on an evaluation
+    #: and ON once funded, because stopping short of a target neither passes
+    #: nor busts while the monthly fee runs either way.
+    #:
+    #: A stopped account is stuck, not saved: it takes no more trades, so its
+    #: balance never moves, so the condition that stopped it stays true. The
+    #: model retires it and buys another rather than pretending it recovers.
+    combine_guard: bool = False
+    funded_guard: bool = False
+    safety_mult: float = 1.5
+
     #: Standard path pricing, matching PATHS["Standard"] in the quarterly
     #: report. Every monthly rebill banks one free reset credit.
     monthly: float = 49.0
@@ -158,7 +171,7 @@ def costs(rules: XFARules, days: float, resets: int, activations: int) -> dict:
 
 def recycle(trades: pd.DataFrame, rules: XFARules = XFARules(),
             policy: Policy = Policy.LOCK_FIRST,
-            funded_scale: float = 1.0) -> dict:
+            funded_scale: float = 1.0, risk_usd: float | None = None) -> dict:
     """Run one real sequence of trades through buy / pass / earn / lose.
 
     ``trades`` must already be simulated at the evaluation's risk per trade and
@@ -168,6 +181,10 @@ def recycle(trades: pd.DataFrame, rules: XFARules = XFARules(),
     0.28 puts a $900 evaluation onto $250 a trade once funded, which is the
     two-stage plan in docs/GO_LIVE.md. P&L and commission both scale with
     contracts, so scaling net_pnl is the same thing as re-running the sizing.
+
+    ``risk_usd`` is the dollars risked per evaluation trade, and is required
+    only when a guard is on: the guard's test is about the room left against
+    the size of the next trade, so it cannot be evaluated without knowing it.
 
     Returns cash withdrawn, money spent, and the counts behind both.
     """
@@ -199,8 +216,13 @@ def recycle(trades: pd.DataFrame, rules: XFARules = XFARules(),
         timeline.append({"ts": ts, "event": event, "trade": at, "cash": cash,
                          "cost": spent, "net": cash - spent})
 
+    if (rules.combine_guard or rules.funded_guard) and risk_usd is None:
+        raise ValueError("a guard needs risk_usd: its test compares the room "
+                         "left against the size of the next trade")
+
     account, funded = _Account(), False
     combine_busts = funded_busts = resets = activations = payouts = 0
+    retired_combine = retired_funded = 0
     bust_streak = worst_streak = 0
     cash = gross = 0.0
     first = trades["entry_ts"].iloc[0]
@@ -216,6 +238,27 @@ def recycle(trades: pd.DataFrame, rules: XFARules = XFARules(),
                else rules.combine_max_contracts)
         scale = min(int(contracts), cap) / contracts if contracts else 0.0
         day = float(pnl) * scale * (funded_scale if funded else 1.0)
+
+        # The guard looks at the room left BEFORE the trade, which is the
+        # only order in which it could ever prevent one.
+        guarded = rules.funded_guard if funded else rules.combine_guard
+        if guarded:
+            limit = rules.funded_loss_limit if funded else rules.loss_limit
+            locks = rules.mll_locks_at if funded else None
+            planned = risk_usd * (funded_scale if funded else 1.0)
+            if account.balance - account.floor(limit, locks) < planned * rules.safety_mult:
+                if funded:
+                    retired_funded += 1
+                    funded_days += (exit_ts - funded_since).total_seconds() / 86400
+                    funded, funded_since = False, None
+                else:
+                    retired_combine += 1
+                resets += 1
+                bust_streak += 1
+                worst_streak = max(worst_streak, bust_streak)
+                account = _Account()
+                mark(exit_ts, "retired", at)
+                continue
 
         account.balance += day
         account.peak = max(account.peak, account.balance)
@@ -282,8 +325,13 @@ def recycle(trades: pd.DataFrame, rules: XFARules = XFARules(),
     return {
         "days": days,
         # One evaluation is bought up front; every bust buys another.
-        "accounts_bought": 1 + combine_busts + funded_busts,
+        "accounts_bought": (1 + combine_busts + funded_busts
+                            + retired_combine + retired_funded),
         "combine_busts": combine_busts,
+        # Stopped by the guard rather than breached: no bust, no pass, and the
+        # reset still bought.
+        "retired_combine": retired_combine,
+        "retired_funded": retired_funded,
         "funded_earned": activations,
         "funded_busts": funded_busts,
         "funded_days": funded_days,
