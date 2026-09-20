@@ -127,9 +127,11 @@ class Config:
             daily_loss_limit=daily,
             max_contracts=max_ct,
             safety_mult=_env("BRIDGE_SAFETY_MULT", 1.5, float),
-            # Both default to the funded-account posture, which is the one
-            # where being wrong is expensive. An evaluation you would re-buy
-            # is the deliberate exception, not the default.
+            # The guard defaults ON even though docs/GO_LIVE.md now runs it
+            # off in both phases. Forgetting the variable then costs money --
+            # measured, it cuts the pass rate from 35% to 10% -- rather than
+            # costing an account, and that is the right way round for a
+            # default. Turning it off is a decision, so it stays explicit.
             use_guard=_env("BRIDGE_USE_GUARD", "1") not in ("0", "false", "False"),
             scaling_plan=_env("BRIDGE_SCALING_PLAN", "0") not in ("0", "false", "False"),
             consistency=CONSISTENCY.get(preset),
