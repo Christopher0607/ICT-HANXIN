@@ -104,3 +104,68 @@ def test_a_half_written_final_line_does_not_lose_the_rest(tmp_path):
 def test_a_journal_with_no_path_writes_nothing_and_still_returns_the_row():
     row = Journal(None).write("placed", key="k")
     assert row["event"] == "placed" and Journal(None).read() == []
+
+
+# --- the account ledger ------------------------------------------------------
+# session_start already records which account, whether the feed is live and
+# whether the guard is on, so what has been spent is in the journal already.
+
+from scripts.reconcile import (STOPPING_RULE, account_ledger,
+                               print_progress)
+
+
+def start(account, day, *, live=True, guard=False):
+    return {"event": "session_start", "ts": f"2026-{day}T13:30:00",
+            "account_id": account, "live_data": live, "use_guard": guard}
+
+
+def test_practice_accounts_are_listed_but_not_counted():
+    """Practice runs on the sim feed, which is the only thing that tells it
+    apart -- and it costs nothing, so it cannot burn a reset."""
+    led = account_ledger([start("PRAC", "10-01", live=False),
+                          start("TS-1", "10-05")])
+    assert [a["phase"] for a in led] == ["practice", "evaluation"]
+
+
+def test_the_guard_is_what_marks_an_account_funded():
+    """docs/GO_LIVE.md turns the guard on only once funded, so it doubles as
+    the flag for which stage an account is at."""
+    led = account_ledger([start("TS-1", "10-05"), start("XFA", "10-20", guard=True)])
+    assert {a["account_id"]: a["phase"] for a in led} == {
+        "TS-1": "evaluation", "XFA": "funded"}
+
+
+def test_an_account_keeps_its_latest_stage():
+    """One account_id can be an evaluation and later a funded account; the
+    journal's last word on it is the true one."""
+    led = account_ledger([start("A", "10-05"), start("A", "10-30", guard=True)])
+    assert led[0]["phase"] == "funded"
+    assert led[0]["sessions"] == 2
+    assert led[0]["first"] == "2026-10-05" and led[0]["last"] == "2026-10-30"
+
+
+def test_sessions_and_dates_accumulate():
+    led = account_ledger([start("A", "10-05"), start("A", "10-06"),
+                          start("A", "10-09")])
+    assert led[0]["sessions"] == 3
+    assert led[0]["first"] == "2026-10-05" and led[0]["last"] == "2026-10-09"
+
+
+def test_the_streak_counts_evaluations_since_the_last_pass(capsys):
+    rows = [start("TS-1", "10-01"), start("TS-2", "10-08"),
+            start("XFA", "10-15", guard=True), start("TS-3", "11-01")]
+    print_progress(account_ledger(rows))
+    out = capsys.readouterr().out
+    assert "evaluations since the last pass: 1" in out
+    assert "funded accounts earned: 1" in out
+
+
+def test_the_rule_fires_once_the_run_is_long_enough(capsys):
+    rows = [start(f"TS-{i}", f"10-{i:02d}") for i in range(1, STOPPING_RULE + 1)]
+    print_progress(account_ledger(rows))
+    assert "Stop and" in capsys.readouterr().out
+
+
+def test_a_journal_with_no_live_account_says_so(capsys):
+    print_progress(account_ledger([start("PRAC", "10-01", live=False)]))
+    assert "none live yet" in capsys.readouterr().out

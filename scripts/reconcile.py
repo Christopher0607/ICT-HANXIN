@@ -48,6 +48,16 @@ NY = "America/New_York"
 #: Entry prices closer than this are a feed difference, not a fault.
 PRICE_TOLERANCE = 2.0
 
+#: Evaluations to buy without passing before stopping to re-examine.
+#:
+#: Measured rather than chosen. Replaying 2016-2026 at $900 a trade, the
+#: evaluations bought per funded account earned were 2 at the median, 3 at the
+#: 75th percentile and 6 at the 90th. A run past six is therefore the worst
+#: tenth of the distribution rather than ordinary bad luck, and the point at
+#: which "one more reset" stops being a reasonable thing to say.
+#: ``scripts/account_lifetime.py`` recomputes it.
+STOPPING_RULE = 6
+
 
 def bridge_trades(rows: list[dict]) -> pd.DataFrame:
     """Placed orders from the journal, one row per trade."""
@@ -134,13 +144,88 @@ def compare(bridge: pd.DataFrame, engine: pd.DataFrame,
     return out
 
 
+def account_ledger(rows: list[dict]) -> list[dict]:
+    """Every account the journal has seen, oldest first.
+
+    ``session_start`` already carries enough to tell them apart, so nothing new
+    has to be written: ``live_data`` is false only on a Practice account, and
+    ``use_guard`` is on for a funded account and off for an evaluation -- the
+    two-stage settings in docs/GO_LIVE.md. What has been spent is therefore
+    already in the file, and was before anyone thought to count it.
+    """
+    seen: dict = {}
+    for r in rows:
+        if r.get("event") != "session_start":
+            continue
+        account = r.get("account_id")
+        if account is None:
+            continue
+        when = str(r.get("ts", ""))[:10]
+        phase = ("practice" if not r.get("live_data")
+                 else "funded" if r.get("use_guard") else "evaluation")
+        if account not in seen:
+            seen[account] = {"account_id": account, "phase": phase,
+                             "first": when, "last": when, "sessions": 0}
+        seen[account]["sessions"] += 1
+        seen[account]["last"] = when
+        # An account that is reconfigured mid-life keeps its latest reading:
+        # switching the guard on is how an evaluation becomes funded.
+        seen[account]["phase"] = phase
+    return sorted(seen.values(), key=lambda a: (a["first"], str(a["account_id"])))
+
+
+def print_progress(ledger: list[dict], rule: int = STOPPING_RULE) -> None:
+    """Where the plan stands against the stopping rule, every time this runs.
+
+    The rule is only worth setting if it is in front of you on the days it
+    matters, and the day it matters is the one where buying another reset feels
+    obviously right.
+    """
+    if not ledger:
+        return
+    practice = [a for a in ledger if a["phase"] == "practice"]
+    real = [a for a in ledger if a["phase"] != "practice"]
+    if not real:
+        print(f"\naccounts: {len(practice)} practice, none live yet")
+        return
+
+    # Evaluations bought since the last one that reached funded.
+    streak, funded = 0, 0
+    for account in real:
+        if account["phase"] == "funded":
+            funded, streak = funded + 1, 0
+        else:
+            streak += 1
+
+    print(f"\nACCOUNTS   ({len(practice)} practice, not counted)")
+    for account in real:
+        mark = "funded" if account["phase"] == "funded" else "evaluation"
+        span = (account["first"] if account["first"] == account["last"]
+                else f'{account["first"]} to {account["last"]}')
+        print(f"  {str(account['account_id']):<12} {mark:<11} {span}"
+              f"   {account['sessions']} sessions")
+
+    left = rule - streak
+    print(f"\n  evaluations since the last pass: {streak} (the current one"
+          f" included), funded accounts earned: {funded}")
+    if left > 0:
+        print(f"  {left} more before the stopping rule at {rule}.")
+    else:
+        print(f"  *** {streak} evaluations without a pass, and the rule was {rule}."
+              f" Measured, that is the worst tenth of the distribution. Stop and"
+              f" re-read the forward log before buying another. ***")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--journal", default=str(DEFAULT_PATH))
     ap.add_argument("--start", required=True, help="inclusive UTC date")
     ap.add_argument("--end", required=True, help="exclusive UTC date")
-    ap.add_argument("--risk", type=float, default=1000.0,
+    ap.add_argument("--risk", type=float, default=900.0,
                     help="must match the risk the bridge was configured with")
+    ap.add_argument("--stopping-rule", type=int, default=STOPPING_RULE,
+                    help="evaluations without a pass before stopping to "
+                         "re-examine (default %(default)s, measured)")
     ap.add_argument("--cutoff-minute", type=int, default=15 * 60 + 30,
                     help="must match BRIDGE_CUTOFF_MINUTE (default 930 = 15:30 ET)")
     args = ap.parse_args(argv)
@@ -181,6 +266,8 @@ def main(argv=None) -> int:
         print("\nstopped by the guard (working as intended, listed for the record)")
         for day in sorted(guarded):
             print(f"  {day}  {', '.join(guarded[day])}")
+
+    print_progress(account_ledger(rows), args.stopping_rule)
 
     serious = [d for d in diffs if d[0] in ("logic", "settings")]
     if serious:

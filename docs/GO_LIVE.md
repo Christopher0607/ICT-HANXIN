@@ -458,6 +458,33 @@ python -m bridge.live --live --risk 900 && sudo pmset sleepnow
 昨晚有沒有乾淨收工，看 journal 最後一行是不是 `session_done`。
 如果是 `entry_deadline` 或 `cancel_failed` 收尾，電腦不會自動關機 —— 那是刻意的。
 
+### 停手規則會自己出現在對帳結果裡
+
+`scripts/reconcile.py` 每次跑完會多印一段，不必另外記帳：
+
+```
+ACCOUNTS   (1 practice, not counted)
+  TS-101       evaluation  2026-10-06 to 2026-10-13   6 sessions
+  TS-102       evaluation  2026-10-14 to 2026-10-22   7 sessions
+  XFA-9        funded      2026-10-28                 1 sessions
+  TS-104       evaluation  2026-11-10                 1 sessions
+
+  evaluations since the last pass: 1 (the current one included), funded accounts earned: 1
+  5 more before the stopping rule at 6.
+```
+
+它**不會自己跑** —— 是你跑對帳的時候，它讀當下的 journal 算給你看。
+journal 每一次 `bridge/live.py` 開機都會自己長，所以你看到的永遠是最新的。
+
+數字從哪來：`session_start` 已經記了 `account_id`、`live_data`、`use_guard`。
+`live_data=0` 是 Practice（不算），`use_guard=0` 是考試帳號，`use_guard=1` 是 funded。
+**不需要你手動記任何東西**，換帳號的時候它自己就知道。
+
+門檻 **6** 是量出來的不是拍的：2016–2026 在 $900 之下，
+每拿到一個 funded 帳戶要燒掉的考試帳號是中位數 2、75% 是 3、**90% 是 6**。
+燒到第 6 個還沒過，你已經在最差的那一成裡了。
+要改門檻用 `--stopping-rule N`，重算用 `scripts/account_lifetime.py`。
+
 ## 什麼情況立刻停
 
 - **口數對不上** —— 每一筆倉位都算錯了
