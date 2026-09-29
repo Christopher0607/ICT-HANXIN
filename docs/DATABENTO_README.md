@@ -135,12 +135,24 @@ print([r["date"] for r in cond if r["condition"] != "available"])
 
 ## 复现 / 增量拉取
 
-```bash
-DATABENTO_API_KEY=<你的 key> uv run python scripts/fetch_databento.py \
-    --start 2026-09-05 --end 2026-09-12 --max-cost-usd 1.00
+key **设成环境变量**（cloud 环境的 API credentials，或 shell 的 export），
+不要写进命令列。下一批（9 月剩下的部分）：
 
+```bash
+uv run python scripts/fetch_databento.py \
+    --start 2026-09-05 --end 2026-09-29 --dry-run   # 只报价
+
+uv run python scripts/fetch_databento.py --start 2026-09-05 --end 2026-09-29
 uv run python scripts/ingest.py        # 合并 + 延长 5m + 校验
+uv run python scripts/forward_log.py   # 往前瞻记录追加
 ```
+
+`--start` 故意从 **09-05** 开始而不是 09-08：已有资料到 09-08 05:26，
+从 09-05 起算能给重叠比对三天的样本，只从 09-08 起算只有 26 根。
+多付的钱远比「参数重现不出原始序列而没发现」便宜。
+
+**如果 `--dry-run` 回 `dataset_unavailable_range`**，就是撞到上面那条订阅上限了 ——
+把 `--end` 往前挪一天再试，不要去关掉任何校验。
 
 `fetch_databento.py`：
 

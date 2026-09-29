@@ -20,6 +20,11 @@ clears two standard errors.
 
 Rows are appended, never rewritten: a log that gets recomputed is not a
 forward log. Re-running only adds trades whose exit is past the last entry.
+
+The log was started at $500 per trade and has to stay there for the same
+reason. ``--restate-risk`` prints the same signals at another size without
+touching the file, for reading the dollars at whatever the account is actually
+running; ``r_multiple`` is the column that does not care either way.
 """
 
 from __future__ import annotations
@@ -118,24 +123,96 @@ def report(log: pd.DataFrame, base: pd.DataFrame) -> None:
               f"{(w > 0).mean():.0%} positive")
 
 
+def resume_from(existing: pd.DataFrame | None) -> pd.Timestamp:
+    """The first bar a re-run may score: the day after the log's last entry.
+
+    This is the whole of the append-only guarantee, so it lives in one named
+    place. Scoring from any earlier bar would recompute rows that are already
+    written, and a log that gets recomputed is not a forward log.
+    """
+    if existing is None or existing.empty:
+        return FORWARD_START
+    last = pd.Timestamp(existing["date"].max(), tz=NY)
+    return last.tz_convert("UTC") + pd.Timedelta(days=1)
+
+
+def assert_same_trades(log: pd.DataFrame, rows: pd.DataFrame, risk: float) -> None:
+    """Fail unless both frames hold the same trades, ignoring size.
+
+    Split out from ``restate`` so it can be tested on the disagreement it
+    exists to catch, rather than only on data where it happens to be quiet.
+    """
+    key = ["date", "entry_et"]
+    odd = log[key].merge(rows[key], on=key, how="outer", indicator=True)
+    odd = odd[odd["_merge"] != "both"]
+    if odd.empty:
+        return
+    first = odd.iloc[0]
+    raise SystemExit(
+        f"the log and the ${risk:,.0f} run disagree about {len(odd)} trade(s), "
+        f"first {first['date']} {first['entry_et']}. Size must not change "
+        "which signals fire; something upstream of sizing is reading the risk."
+    )
+
+
+def restate(log: pd.DataFrame, df1: pd.DataFrame, cfg: LTFSweepConfig,
+            risk: float) -> pd.DataFrame:
+    """The trades already in the log, re-sized at ``risk``. Never written.
+
+    The log is append-only and was started at one risk per trade, so it cannot
+    be re-sized in place: the earlier rows would come to mean something
+    different from the later ones and the record would be worth nothing. This
+    re-runs the same signals at a different size and reports the dollars,
+    leaving the file alone.
+
+    Position size must not reach back into signal generation, so the restated
+    run has to produce the *same* trades. A trade one side has and the other
+    does not is that leak, and raises rather than being averaged over.
+    """
+    bars = df1[df1.ts >= FORWARD_START].reset_index(drop=True)
+    trades = simulate(generate_orders(bars, cfg, one_per_day=True), bars,
+                      BacktestConfig(risk_per_trade_usd=risk))
+    rows = trade_rows(trades)
+    # The log stops at its last entry; data past it is not restated, it is
+    # simply not logged yet.
+    rows = rows[rows["date"] <= log["date"].max()].reset_index(drop=True)
+
+    assert_same_trades(log, rows, risk)
+    return rows
+
+
+def report_restated(log: pd.DataFrame, rows: pd.DataFrame, risk: float) -> None:
+    """Same signals, different size. R is the part that carries over."""
+    print(f"\n  RESTATED AT ${risk:,.0f}/TRADE  (printed, never logged)")
+    print(f"    net P&L            ${rows['net_pnl'].sum():+,.2f}   "
+          f"(logged ${log['net_pnl'].sum():+,.2f})")
+    print(f"    mean per trade     ${rows['net_pnl'].mean():+,.2f}")
+    print(f"    contracts          {log['contracts'].tolist()} -> "
+          f"{rows['contracts'].tolist()}")
+    print(f"    total R            {log['r_multiple'].sum():+.2f} -> "
+          f"{rows['r_multiple'].sum():+.2f}   "
+          "(size does not move R; only the integer lot rounding does)")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--log", default=str(DEFAULT_LOG))
     ap.add_argument("--risk", type=float, default=500.0,
                     help="must match the risk the log was started with")
+    ap.add_argument("--restate-risk", type=float, default=None,
+                    help="also print the logged trades re-sized at this risk; "
+                         "reporting only, the log is still written at --risk")
     ap.add_argument("--dry-run", action="store_true", help="score but do not write")
     args = ap.parse_args(argv)
 
     path = pathlib.Path(args.log)
     existing = pd.read_csv(path, dtype={"date": str}) if path.exists() else None
     if existing is not None and not existing.empty:
-        last = existing["date"].max()
-        start = pd.Timestamp(last, tz=NY).tz_convert("UTC") + pd.Timedelta(days=1)
-        print(f"log has {len(existing)} trades through {last}")
+        print(f"log has {len(existing)} trades through {existing['date'].max()}")
     else:
-        start = FORWARD_START
         print(f"no log yet; starting at {FORWARD_START.date()} "
               "(the first bar the research never saw)")
+    start = resume_from(existing)
 
     df1 = D.load("1m")
     bars = df1[df1.ts >= start].reset_index(drop=True)
@@ -159,6 +236,9 @@ def main(argv=None) -> int:
     log = log.drop_duplicates(subset=["date", "entry_et"], keep="first")
 
     report(log, baseline(df1, cfg, args.risk))
+    if args.restate_risk:
+        report_restated(log, restate(log, df1, cfg, args.restate_risk),
+                        args.restate_risk)
 
     if args.dry_run:
         print("\n--dry-run: not written")
