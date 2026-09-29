@@ -215,19 +215,22 @@ def main(argv=None) -> int:
     start = resume_from(existing)
 
     df1 = D.load("1m")
+    cfg = LTFSweepConfig()
     bars = df1[df1.ts >= start].reset_index(drop=True)
     if bars.empty:
+        # No new data is the ordinary state between fetches, and it is not a
+        # reason to skip the rest: the summary and --restate-risk read the log
+        # that is already there, which does not need a new bar to exist.
         print(f"no bars after {start.date()}; nothing to add. "
-              "Fetch newer data first.")
-        return 0
-
-    print(f"scoring {start.date()} -> {df1.ts.max().date()} "
-          f"({bars.trading_date.nunique()} trading days) ...")
-    cfg = LTFSweepConfig()
-    trades = simulate(generate_orders(bars, cfg, one_per_day=True), bars,
-                      BacktestConfig(risk_per_trade_usd=args.risk))
-    fresh = trade_rows(trades)
-    print(f"  {len(fresh)} new filled trades")
+              "Fetch newer data to extend the log.")
+        fresh = trade_rows(pd.DataFrame())
+    else:
+        print(f"scoring {start.date()} -> {df1.ts.max().date()} "
+              f"({bars.trading_date.nunique()} trading days) ...")
+        trades = simulate(generate_orders(bars, cfg, one_per_day=True), bars,
+                          BacktestConfig(risk_per_trade_usd=args.risk))
+        fresh = trade_rows(trades)
+        print(f"  {len(fresh)} new filled trades")
 
     log = pd.concat([existing, fresh], ignore_index=True) if existing is not None else fresh
     if log.empty:

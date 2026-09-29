@@ -18,6 +18,7 @@ import pathlib
 import pandas as pd
 import pytest
 
+from scripts import forward_log
 from scripts.forward_log import (
     COLUMNS,
     FORWARD_START,
@@ -99,3 +100,27 @@ def test_a_window_with_no_signals_still_has_the_log_columns():
     """The normal case on a re-run that finds nothing new."""
     assert list(trade_rows(pd.DataFrame()).columns) == COLUMNS
     assert trade_rows(pd.DataFrame({"filled": []})).empty
+
+
+def test_nothing_new_to_append_still_reports(tmp_path, monkeypatch, capsys):
+    """An early return here once swallowed the summary and the restatement.
+
+    Having nothing to append is the ordinary state between fetches, and it is
+    exactly when someone runs this to read the log they already have.
+    """
+    log = tmp_path / "log.csv"
+    log.write_text(LOG.read_text())
+    rows = len(pd.read_csv(log))
+
+    # Data that stops well before the log does, so there is nothing to score.
+    stale = pd.DataFrame({"ts": pd.to_datetime(["2020-01-02T14:30Z"])})
+    monkeypatch.setattr(forward_log.D, "load", lambda *a, **k: stale)
+    monkeypatch.setattr(forward_log, "baseline",
+                        lambda *a, **k: pd.DataFrame({"net_pnl": [1.0, -1.0]}))
+    seen = {}
+    monkeypatch.setattr(forward_log, "report",
+                        lambda log_, base: seen.update(n=len(log_)))
+
+    assert forward_log.main(["--log", str(log), "--dry-run"]) == 0
+    assert seen["n"] == rows, "the report must see every logged trade"
+    assert "nothing to add" in capsys.readouterr().out
