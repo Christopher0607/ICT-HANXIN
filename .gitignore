@@ -6,3 +6,9 @@ __pycache__/
 data/processed/
 trades*.csv
 data/bridge_journal.jsonl
+
+# A wrapper that sets a credential is a file with a credential in it. The
+# template beside it carries the non-secret settings; the real one never
+# enters the tree.
+run_bridge.bat
+.env

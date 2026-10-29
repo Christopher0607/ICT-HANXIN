@@ -1,0 +1,34 @@
+@echo off
+rem Copy to run_bridge.bat (which .gitignore excludes) and edit there.
+rem
+rem Only non-secret settings belong in this file. The three credentials --
+rem TOPSTEPX_USERNAME, TOPSTEPX_API_KEY, TOPSTEPX_ACCOUNT_ID -- go in Windows
+rem user environment variables instead: a .bat that sets a key is a file with a
+rem key in it, and every other part of this project reads keys from the
+rem environment only.
+rem
+rem This is cmd syntax. In PowerShell `set` is an alias for Set-Variable and
+rem does NOT set an environment variable -- use $env:NAME = "value" there.
+rem See docs/WINDOWS_SETUP.md.
+
+set BRIDGE_PRESET=Topstep 50K
+set BRIDGE_CONTRACT_ID=CON.F.US.MNQ.Z26
+set BRIDGE_TICK_SIZE=0.25
+set BRIDGE_POINT_VALUE=2.0
+set BRIDGE_ACCOUNT_START=50000
+
+rem Off in BOTH phases -- docs/GO_LIVE.md has the two-stage table and the
+rem measurement behind it. The default is 1, so leaving this out runs the guard.
+set BRIDGE_USE_GUARD=0
+
+rem 0 during the Combine (fixed 50 micros), 1 once funded (20/30/50 by balance).
+set BRIDGE_SCALING_PLAN=0
+
+rem 0 on a Practice account, 1 on a real one. Getting it wrong returns an empty
+rem bar array rather than an error, so nothing tells you.
+set BRIDGE_LIVE_DATA=0
+
+rem --live actually sends orders. Drop it to dry-run against DryRunBroker.
+rem The shutdown stays on the right of && so it only runs on exit code 0,
+rem which means nothing was left open. Never put it inside the engine.
+uv run python -m bridge.live --live --risk 900 && shutdown /h
